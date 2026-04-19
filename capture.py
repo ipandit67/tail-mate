@@ -13,13 +13,13 @@ CAPTURE_PATH = "/tmp/capture.jpg"
 
 
 def open_camera():
-    for index in [0, 1]:
+    for index in [0, 1, 2]:
         cap = cv2.VideoCapture(index)
         if cap.isOpened():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             return cap
-    raise RuntimeError("No webcam found at index 0 or 1")
+    raise RuntimeError("No webcam found at index 0, 1, or 2")
 
 
 def to_gray_blur(frame):
