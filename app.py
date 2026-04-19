@@ -51,7 +51,7 @@ latest_sensors = {"temp": 0, "humidity": 0, "distance": 0, "movement": 0}
 latest_sensor_timestamp = None
 
 # --- GEMINI CONFIGURATION ---
-genai.configure(api_key="AIzaSyDgZ5Ge4rtpnopI0QCqKRtgMb18uzUo12U")
+genai.configure(api_key="AIzaSyAdlzNMwNigeVmeheBwF1E1jrUmQpTfiRY")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 
@@ -448,13 +448,17 @@ def generate_species_notes(species_name):
 
 @app.route('/sensors', methods=['POST'])
 def sensors():
-    global latest_sensors
+    global latest_sensors, latest_sensor_timestamp
     latest_sensors = {
         "temp": float(request.form.get('temp', latest_sensors['temp'])),
         "humidity": float(request.form.get('humidity', latest_sensors['humidity'])),
         "distance": float(request.form.get('distance', latest_sensors['distance'])),
-        "movement": float(request.form.get('movement', latest_sensors['movement'])),
+        "movement": float(request.form.get('movement', latest_sensors.get('movement', 0))),
+        "movement_x": float(request.form.get('movement_x', latest_sensors.get('movement_x', 0))),
+        "movement_y": float(request.form.get('movement_y', latest_sensors.get('movement_y', 0))),
+        "movement_z": float(request.form.get('movement_z', latest_sensors.get('movement_z', 0))),
     }
+    latest_sensor_timestamp = datetime.now().isoformat()
     return jsonify({"success": True})
 
 
@@ -943,23 +947,25 @@ def stream():
 
 @app.route('/status', methods=['GET'])
 def status():
+    PLACEHOLDER_KEY = "YOUR_API_KEY_HERE"
+    api_key = "AIzaSyAdlzNMwNigeVmeheBwF1E1jrUmQpTfiRY"
+    gemini_ok = bool(api_key and api_key != PLACEHOLDER_KEY)
+
     supabase_ok = False
-    total_observations = 0
     try:
-        result = supabase_client.table("observations").select("id", count="exact").execute()
-        total_observations = result.count if result.count is not None else len(result.data)
+        supabase_client.table("observations").select("id").limit(1).execute()
         supabase_ok = True
     except Exception:
         pass
 
     return jsonify({
         "test_mode": TEST_MODE,
-        "gemini_key_present": bool(genai.get_default_api_key() if hasattr(genai, 'get_default_api_key') else True),
-        "supabase_connected": supabase_ok,
+        "gemini_key_present": gemini_ok,
+        "backend_running": True,
         "last_sensor_time": latest_sensor_timestamp,
-        "total_observations": total_observations,
-        "session_events": len(session_events),
         "latest_sensors": latest_sensors,
+        "session_events_count": len(session_events),
+        "supabase_connected": supabase_ok,
     })
 
 
