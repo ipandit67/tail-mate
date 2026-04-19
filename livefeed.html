@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TailMate – Live Feed</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:#1a1a1a;color:#f0ede8;font-family:'Roboto Condensed',sans-serif;}
+  .feed-layout{display:flex;gap:0;height:calc(100vh - 110px);min-height:400px;}
+  .feed-video-col{flex:1;position:relative;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .feed-video-col img{width:100%;height:100%;object-fit:contain;display:block;}
+  .feed-video-col .offline-msg{position:absolute;color:#888;font-size:18px;display:none;}
+  .event-banner{position:absolute;top:0;left:0;right:0;background:#C0392B;color:#fff;text-align:center;font-size:20px;font-weight:700;padding:10px;letter-spacing:2px;display:none;z-index:10;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:0.3;}}
+  .event-banner.active{display:block;animation:blink 0.7s infinite;}
+  .feed-side-col{width:320px;display:flex;flex-direction:column;background:#23292e;border-left:1px solid #333;}
+  .detection-panel{padding:20px;border-bottom:1px solid #333;flex-shrink:0;}
+  .detection-panel h3{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:12px;}
+  .det-species{font-size:26px;font-weight:700;color:#f0ede8;margin-bottom:8px;line-height:1.2;}
+  .det-badge{display:inline-block;padding:6px 16px;border-radius:20px;font-size:14px;font-weight:700;color:#fff;margin-bottom:8px;}
+  .det-row{font-size:13px;color:#aaa;margin:4px 0;}
+  .det-row b{color:#f0ede8;}
+  .det-empty{color:#555;font-size:14px;}
+  .det-notes{font-size:13px;color:#ccc;margin:10px 0;line-height:1.4;font-style:italic;border-left:2px solid #4A7C59;padding-left:10px;}
+  .timeline-col{flex:1;overflow-y:auto;padding:12px;}
+  .timeline-col h3{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px;}
+  .event-card{background:#2d3439;border-radius:8px;padding:12px 14px;margin-bottom:10px;cursor:pointer;border:1px solid transparent;transition:border 0.15s;}
+  .event-card:hover{border-color:#4A7C59;}
+  .event-card .ec-species{font-size:16px;font-weight:700;color:#f0ede8;}
+  .event-card .ec-approach{font-size:12px;margin:4px 0;color:#aaa;}
+  .event-card .ec-time{font-size:11px;color:#666;}
+  .no-events{color:#555;font-size:13px;text-align:center;margin-top:20px;}
+</style>
+</head>
+<body>
+<div class="feed-layout">
+  <div class="feed-video-col">
+    <div class="event-banner" id="eventBanner">EVENT DETECTED</div>
+    <img id="videoFeed" src="http://localhost:8000/video_feed" alt="Live Feed"/>
+    <div class="offline-msg" id="offlineMsg">Camera offline — reconnecting…</div>
+  </div>
+
+  <div class="feed-side-col">
+    <div class="detection-panel">
+      <h3>Latest Detection</h3>
+      <div id="detectionContent"><p class="det-empty">Awaiting capture…</p></div>
+    </div>
+    <div class="timeline-col">
+      <h3>Session Events</h3>
+      <div id="eventTimeline"><p class="no-events">No events yet this session.</p></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const videoFeed = document.getElementById('videoFeed');
+const offlineMsg = document.getElementById('offlineMsg');
+const eventBanner = document.getElementById('eventBanner');
+const detectionContent = document.getElementById('detectionContent');
+const eventTimeline = document.getElementById('eventTimeline');
+
+let lastEventCount = 0;
+let bannerTimeout = null;
+
+// Auto-reconnect video feed on error
+function reconnectFeed() {
+  offlineMsg.style.display = 'block';
+  videoFeed.style.opacity = '0.3';
+  setTimeout(() => {
+    videoFeed.src = 'http://localhost:8000/video_feed?' + Date.now();
+  }, 3000);
+}
+videoFeed.onerror = reconnectFeed;
+videoFeed.onload = () => {
+  offlineMsg.style.display = 'none';
+  videoFeed.style.opacity = '1';
+};
+
+function approachabilityColor(text) {
+  if (!text) return '#888';
+  if (text.includes('Do Not')) return '#C0392B';
+  if (text.includes('Observe')) return '#E8923A';
+  return '#4A7C59';
+}
+
+function renderDetection(ev) {
+  const color = approachabilityColor(ev.approachability);
+  const notes = ev.notes ? `<div class="det-notes">${ev.notes}</div>` : '';
+  detectionContent.innerHTML = `
+    <div class="det-species">${ev.species}</div>
+    <div class="det-badge" style="background:${color}">${ev.approachability}</div>
+    ${notes}
+    <div class="det-row">Confidence: <b>${ev.confidence}%</b></div>
+    <div class="det-row">Time: <b>${ev.timestamp}</b></div>
+  `;
+}
+
+function renderTimeline(events) {
+  if (events.length === 0) {
+    eventTimeline.innerHTML = '<p class="no-events">No events yet this session.</p>';
+    return;
+  }
+  eventTimeline.innerHTML = events.slice().reverse().map((ev, i) => `
+    <div class="event-card" onclick="openJournalEntry(${events.length - 1 - i})">
+      <div class="ec-species">${ev.species}</div>
+      <div class="ec-approach">${ev.approachability}</div>
+      <div class="ec-time">${ev.timestamp}</div>
+    </div>
+  `).join('');
+}
+
+function openJournalEntry(index) {
+  window.parent.location.href = 'journal.html';
+}
+
+function triggerBanner() {
+  eventBanner.classList.add('active');
+  clearTimeout(bannerTimeout);
+  bannerTimeout = setTimeout(() => eventBanner.classList.remove('active'), 5000);
+}
+
+async function pollEvents() {
+  try {
+    const res = await fetch('http://localhost:8000/events');
+    if (!res.ok) return;
+    const events = await res.json();
+    if (events.length > lastEventCount) {
+      renderDetection(events[events.length - 1]);
+      triggerBanner();
+      lastEventCount = events.length;
+    }
+    renderTimeline(events);
+  } catch (e) {
+    // backend offline, ignore
+  }
+}
+
+// Poll every 3 seconds
+pollEvents();
+setInterval(pollEvents, 3000);
+</script>
+</body>
+</html>

@@ -1,7 +1,11 @@
+import cv2
+import io
+import os
 import pandas as pd
 import json
 import queue
 import threading
+import numpy as np
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
@@ -10,17 +14,29 @@ import PIL.Image  # For handling the photo
 from supabase import create_client
 
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
+
+
+@app.route('/')
+@app.route('/index.html')
+def serve_index():
+    return app.send_static_file('index.html')
+
 # --- SUPABASE CONFIGURATION ---
 SUPABASE_URL = "https://kazkfrgbnsatagfckjpa.supabase.co"
-# INSERT SERVICE ROLE KEY HERE
 SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImthemtmcmdibnNhdGFnZmNranBhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjU0Nzg3NiwiZXhwIjoyMDkyMTIzODc2fQ.Z40rSTsoQufUqM81ICBCxEIGab9cL88sS8t1eRrO8W8"
 supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # --- REVIEW QUEUE ---
 review_queue = queue.Queue()
 current_review = {"state": "awaiting"}
+
+# --- SESSION EVENTS (in-memory, for /events endpoint) ---
+session_events = []
+
+# --- LATEST SENSOR READINGS ---
+latest_sensors = {"temp": 0, "humidity": 0, "distance": 0, "movement": 0}
 
 # --- GEMINI CONFIGURATION ---
 genai.configure(api_key="AIzaSyDgZ5Ge4rtpnopI0QCqKRtgMb18uzUo12U")
@@ -87,13 +103,16 @@ def handle_arduino_trigger():
         "alert": alert_color,
         "status": status_text
     })
+# --- VIDEO FEED STATE ---
+_motion_flash_until = 0
+
+
 # ==========================================
-# 1. DATA LAYER (From your uploaded CSV)
+# 1. DATA LAYER
 # ==========================================
 def build_reference_db(csv_path):
     df = pd.read_csv(csv_path)
-    
-    # Manual Conservation Status Mapping (Step 3)
+
     status_map = {
         "Coast Horned Lizard": "Threatened (CA)",
         "Orange-throated Whiptail": "Vulnerable",
@@ -102,14 +121,12 @@ def build_reference_db(csv_path):
         "Southern Pacific Rattlesnake": "Common"
     }
 
-    # Extract geographic bounds for Habitat Match (Step 4)
     ranges = df.groupby('common_name').agg({
         'latitude': ['min', 'max'],
         'longitude': ['min', 'max']
     })
     ranges.columns = ['lat_min', 'lat_max', 'lon_min', 'lon_max']
-    
-    # Combine into a lookup dictionary
+
     db = {}
     for species in ranges.index:
         db[species] = {
@@ -118,33 +135,233 @@ def build_reference_db(csv_path):
         }
     return db
 
-# Initialize the Database
+
 SPECIES_DB = build_reference_db('observations-712033.csv')
+
+VENOMOUS_SPECIES = {"Red Diamond Rattlesnake", "Southern Pacific Rattlesnake"}
+
 
 # ==========================================
 # 2. ML & LOGIC LAYER
 # ==========================================
+def fuzzy_lookup(species_name):
+    name_lower = species_name.lower()
+    # Exact case-insensitive match
+    for key in SPECIES_DB:
+        if key.lower() == name_lower:
+            return SPECIES_DB[key]
+    # Substring match in either direction
+    for key in SPECIES_DB:
+        if key.lower() in name_lower or name_lower in key.lower():
+            return SPECIES_DB[key]
+    return None
+
+
 def analyze_capture(species_name, lat, lon):
-    """Core logic to determine if Arduino should alert Red or Green"""
-    metadata = SPECIES_DB.get(species_name)
-    
+    metadata = fuzzy_lookup(species_name)
+
     if not metadata:
         return "RED", "Unknown Species", False
 
-    # Check Endangered Status
     is_endangered = any(word in metadata['status'] for word in ["Threatened", "Vulnerable", "Endangered"])
-    
-    # Check Habitat Match (Step 4)
+
     b = metadata['bounds']
-    # We add a small buffer (0.01) to the CSV range to be fair to the user
     in_habitat = (b['lat_min'] - 0.01 <= lat <= b['lat_max'] + 0.01) and \
                  (b['lon_min'] - 0.01 <= lon <= b['lon_max'] + 0.01)
 
-    # Determine Alert (Step 3)
-    # RED if endangered OR if species is found outside its known San Diego range
     alert = "RED" if (is_endangered or not in_habitat) else "GREEN"
-    
+
     return alert, metadata['status'], in_habitat
+
+
+def get_approachability(is_venomous, alert, habitat_ok, status_text):
+    if is_venomous or (alert == "RED" and not habitat_ok):
+        return "Do Not Approach"
+    is_endangered = any(word in status_text for word in ["Threatened", "Vulnerable", "Endangered"])
+    if is_endangered or not habitat_ok:
+        return "Observe from Distance"
+    return "Approach Safely"
+
+
+def generate_species_notes(species_name):
+    try:
+        prompt = f"Write a brief 2-3 sentence field note about {species_name} in San Diego. Focus on identifying features and behavior. Keep it under 150 characters."
+        response = client.models.generate_content(model='gemini-1.5-flash', contents=[prompt])
+        return response.text.strip()
+    except Exception as e:
+        return f"Unable to generate notes: {str(e)}"
+
+
+# ==========================================
+# 3. API ENDPOINTS
+# ==========================================
+
+@app.route('/sensors', methods=['POST'])
+def sensors():
+    global latest_sensors
+    latest_sensors = {
+        "temp": float(request.form.get('temp', latest_sensors['temp'])),
+        "humidity": float(request.form.get('humidity', latest_sensors['humidity'])),
+        "distance": float(request.form.get('distance', latest_sensors['distance'])),
+        "movement": float(request.form.get('movement', latest_sensors['movement'])),
+    }
+    return jsonify({"success": True})
+
+
+@app.route('/observations', methods=['GET'])
+def observations():
+    result = supabase_client.table("observations").select("*").order("timestamp", desc=True).execute()
+    return jsonify(result.data)
+
+
+@app.route('/events', methods=['GET'])
+def events():
+    return jsonify(session_events)
+
+
+@app.route('/upload_capture', methods=['POST'])
+def handle_arduino_trigger():
+    global current_review, _motion_flash_until
+
+    img_file = request.files['image']
+    img_bytes = img_file.read()
+    img = PIL.Image.open(io.BytesIO(img_bytes))
+
+    temp = float(request.form.get('temp') or latest_sensors['temp'])
+    humidity = float(request.form.get('humidity') or latest_sensors['humidity'])
+    distance = float(request.form.get('distance') or latest_sensors['distance'])
+
+    current_review = {
+        "state": "processing",
+        "temp": temp,
+        "humidity": humidity,
+        "distance": distance,
+    }
+    review_queue.put(current_review.copy())
+
+    # Save image to /tmp and upload to Supabase Storage
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    capture_path = "/tmp/capture.jpg"
+    storage_filename = f"captures/{ts}.jpg"
+
+    with open(capture_path, "wb") as f:
+        f.write(img_bytes)
+
+    image_url = ""
+    try:
+        with open(capture_path, "rb") as f:
+            supabase_client.storage.from_("captures").upload(
+                storage_filename,
+                f.read(),
+                {"content-type": "image/jpeg"}
+            )
+        image_url = f"{SUPABASE_URL}/storage/v1/object/public/captures/{storage_filename}"
+    except Exception as e:
+        print(f"Storage upload failed: {e}")
+
+    # Signal video feed to flash red for 2 seconds
+    _motion_flash_until = __import__('time').time() + 2
+
+    prompt = "Identify this San Diego reptile. Give me ONLY the common name."
+    response = client.models.generate_content(model='gemini-1.5-flash', contents=[prompt, img])
+    detected_species = response.text.strip()
+    lat = float(request.form.get('lat', 32.880))
+    lon = float(request.form.get('lon', -117.235))
+
+    alert_color, status_text, habitat_ok = analyze_capture(detected_species, lat, lon)
+
+    is_venomous = detected_species in VENOMOUS_SPECIES
+    approachability = get_approachability(is_venomous, alert_color, habitat_ok, status_text)
+    approachability_color = "#4A7C59" if alert_color == "GREEN" else ("#E8923A" if status_text == "Common" else "#C0392B")
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    notes = generate_species_notes(detected_species)
+
+    current_review = {
+        "state": "result",
+        "species": detected_species,
+        "alert": alert_color,
+        "status": status_text,
+        "habitat_match": habitat_ok,
+        "venomous": is_venomous,
+        "approachability": approachability,
+        "approachability_color": approachability_color,
+        "confidence": 92,
+        "lat": lat,
+        "lon": lon,
+        "temp": temp,
+        "humidity": humidity,
+        "distance": distance,
+        "timestamp": timestamp,
+        "image_url": image_url,
+        "notes": notes,
+    }
+    review_queue.put(current_review.copy())
+
+    session_events.append({
+        "species": detected_species,
+        "timestamp": timestamp,
+        "approachability": approachability,
+        "confidence": 92,
+        "image_url": image_url,
+        "notes": notes,
+    })
+
+    return jsonify({
+        "species": detected_species,
+        "alert": alert_color,
+        "status": status_text
+    })
+
+
+@app.route('/video_feed')
+def video_feed():
+    def generate():
+        import time
+        # Open a dedicated camera for this stream — not shared with other threads
+        cam = None
+        for index in [0, 1, 2]:
+            cap = cv2.VideoCapture(index)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                cam = cap
+                break
+
+        if cam is None:
+            return
+
+        prev_gray = None
+        try:
+            while True:
+                ret, frame = cam.read()
+                if not ret:
+                    time.sleep(0.1)
+                    continue
+
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray = cv2.GaussianBlur(gray, (21, 21), 0)
+
+                if prev_gray is not None:
+                    diff = cv2.absdiff(prev_gray, gray)
+                    _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+                    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    for c in contours:
+                        if cv2.contourArea(c) > 500:
+                            x, y, w, h = cv2.boundingRect(c)
+                            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+                if time.time() < _motion_flash_until:
+                    cv2.rectangle(frame, (0, 0), (frame.shape[1], frame.shape[0]), (0, 0, 255), 8)
+
+                prev_gray = gray
+
+                _, jpeg = cv2.imencode('.jpg', frame)
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+        finally:
+            cam.release()
+
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 REVIEW_HTML = """<!DOCTYPE html>
@@ -202,7 +419,7 @@ es.onmessage = function(e) {
     const venomHtml = d.venomous ? `<div class="venomous-warn">⚠️ VENOMOUS</div>` : '';
     app.innerHTML = `
       <div class="species-name">${d.species}</div>
-      <div class="badge" style="background:${d.approachability_color}">${d.alert === 'GREEN' ? '✅ Approachable' : '🚫 Stay Back'}</div>
+      <div class="badge" style="background:${d.approachability_color}">${d.approachability}</div>
       ${venomHtml}
       <div class="info-row">📋 Conservation: <b>${d.status}</b></div>
       <div class="info-row">🗺️ Habitat Match: <b>${d.habitat_match ? 'Yes' : 'No (Outside Range)'}</b></div>
@@ -236,7 +453,6 @@ def review_page():
 @app.route('/stream')
 def stream():
     def generate():
-        # Send current state immediately on connect
         yield f"data: {json.dumps(current_review)}\n\n"
         while True:
             try:
@@ -259,6 +475,7 @@ def confirm():
         "status": current_review.get("status"),
         "habitat_match": current_review.get("habitat_match"),
         "venomous": current_review.get("venomous"),
+        "approachability": current_review.get("approachability"),
         "confidence": current_review.get("confidence"),
         "lat": current_review.get("lat"),
         "lon": current_review.get("lon"),
@@ -266,6 +483,7 @@ def confirm():
         "humidity": current_review.get("humidity"),
         "distance": current_review.get("distance"),
         "timestamp": current_review.get("timestamp"),
+        "image_url": current_review.get("image_url", ""),
     }
     supabase_client.table("observations").insert(record).execute()
     return jsonify({"success": True})
@@ -281,4 +499,4 @@ def reject():
 
 if __name__ == '__main__':
     print("FieldLog Backend Active on http://localhost:8000")
-    app.run(debug=True, port=8000)
+    app.run(debug=True, port=8000, host='0.0.0.0', threaded=True)
