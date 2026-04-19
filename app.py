@@ -5,7 +5,7 @@ import threading
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
-import google.genai as genai
+import google.generativeai as genai
 import PIL.Image  # For handling the photo
 from supabase import create_client
 
@@ -23,7 +23,8 @@ review_queue = queue.Queue()
 current_review = {"state": "awaiting"}
 
 # --- GEMINI CONFIGURATION ---
-client = genai.Client(api_key="AIzaSyDgZ5Ge4rtpnopI0QCqKRtgMb18uzUo12U")
+genai.configure(api_key="AIzaSyDgZ5Ge4rtpnopI0QCqKRtgMb18uzUo12U")
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 @app.route('/upload_capture', methods=['POST'])
 def handle_arduino_trigger():
@@ -47,7 +48,7 @@ def handle_arduino_trigger():
 
     # 2. ASK THE BRAIN (The Gemini API call)
     prompt = "Identify this San Diego reptile. Give me ONLY the common name."
-    response = client.models.generate_content(model='gemini-1.5-flash', contents=[prompt, img])
+    response = model.generate_content([prompt, img])
     detected_species = response.text.strip() # Example: "Coast Horned Lizard"
     lat = float(request.form.get('lat', 32.880))
     lon = float(request.form.get('lon', -117.235))
