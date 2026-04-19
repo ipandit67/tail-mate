@@ -2,9 +2,36 @@ import pandas as pd
 import json
 from flask import Flask, request, jsonify
 from datetime import datetime
+import google.generativeai as genai
+import PIL.Image  # For handling the photo
+
 
 app = Flask(__name__)
+# --- GEMINI CONFIGURATION ---
+genai.configure(api_key="YOUR_GEMINI_API_KEY")
+model = genai.GenerativeModel('gemini-1.5-flash')
 
+@app.route('/upload_capture', methods=['POST'])
+def handle_arduino_trigger():
+    # 1. Get the image from the Arduino/Laptop Camera
+    img_file = request.files['image']
+    img = PIL.Image.open(img_file)
+
+    # 2. ASK THE BRAIN (The Gemini API call)
+    prompt = "Identify this San Diego reptile. Give me ONLY the common name."
+    response = model.generate_content([prompt, img])
+    detected_species = response.text.strip() # Example: "Coast Horned Lizard"
+
+    # 3. USE YOUR DATA (The Dictionary check you already have)
+    # This checks the Gemini result against your observations-712033.csv
+    alert_color, status_text, habitat_ok = analyze_capture(detected_species, lat, lon)
+
+    # 4. SEND RESPONSE BACK TO ARDUINO
+    return jsonify({
+        "species": detected_species,
+        "alert": alert_color,
+        "status": status_text
+    })
 # ==========================================
 # 1. DATA LAYER (From your uploaded CSV)
 # ==========================================
