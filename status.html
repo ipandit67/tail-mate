@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TailMate System Status</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:#1a1a1a;color:#f0ede8;font-family:'Roboto Condensed',sans-serif;padding:24px;}
+  h1{font-size:22px;font-weight:700;margin-bottom:6px;letter-spacing:1px;}
+  .subtitle{font-size:13px;color:#888;margin-bottom:24px;}
+  .section-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:2px;margin:18px 0 10px;font-weight:700;}
+  .status-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;}
+  .status-card{background:#23292e;border-radius:10px;padding:16px 20px;display:flex;align-items:center;gap:14px;border:1px solid #333;}
+  .status-icon{font-size:24px;flex-shrink:0;width:30px;text-align:center;}
+  .status-label{font-size:12px;color:#aaa;margin-bottom:2px;}
+  .status-value{font-size:16px;font-weight:700;}
+  .ok{color:#4A7C59;}
+  .fail{color:#C0392B;}
+  .neutral{color:#f0ede8;}
+  .warn{color:#E8923A;}
+  .footer{font-size:11px;color:#555;margin-top:24px;text-align:right;}
+  .back-link{display:inline-block;margin-top:18px;color:#888;text-decoration:none;font-size:13px;}
+  .back-link:hover{color:#f0ede8;}
+</style>
+</head>
+<body>
+<h1>⚙ TailMate System Status</h1>
+<p class="subtitle">Auto-refreshes every 3 seconds · <span id="last-refresh">—</span></p>
+
+<div class="section-label">System</div>
+<div class="status-grid" id="system-grid"></div>
+
+<div class="section-label">Latest Sensor Readings</div>
+<div class="status-grid" id="sensor-grid"></div>
+
+<a href="/" class="back-link">← Back to Dashboard</a>
+<p class="footer">TailMate dev tool</p>
+
+<script>
+const systemGrid = document.getElementById('system-grid');
+const sensorGrid = document.getElementById('sensor-grid');
+const lastRefresh = document.getElementById('last-refresh');
+
+function card(icon, label, value, cls) {
+  return `<div class="status-card">
+    <div class="status-icon">${icon}</div>
+    <div>
+      <div class="status-label">${label}</div>
+      <div class="status-value ${cls}">${value}</div>
+    </div>
+  </div>`;
+}
+
+function check(ok) { return ok ? '✓' : '✕'; }
+function checkCls(ok) { return ok ? 'ok' : 'fail'; }
+
+async function refresh() {
+  try {
+    const res = await fetch('/status');
+    const d = await res.json();
+
+    systemGrid.innerHTML = [
+      card('🧪', 'Test Mode', `${check(d.test_mode)} ${d.test_mode ? 'ON (mock species)' : 'OFF (live Gemini)'}`, d.test_mode ? 'warn' : 'ok'),
+      card('🤖', 'Gemini API Key', `${check(d.gemini_key_present)} ${d.gemini_key_present ? 'Present' : 'Missing'}`, checkCls(d.gemini_key_present)),
+      card('🗄️', 'Supabase', `${check(d.supabase_connected)} ${d.supabase_connected ? 'Connected' : 'Disconnected'}`, checkCls(d.supabase_connected)),
+      card('🌡️', 'Last Sensor Reading', d.last_sensor_time ? d.last_sensor_time.split('T').join(' ').slice(0,19) : '✕ Never received', d.last_sensor_time ? 'ok' : 'warn'),
+      card('📋', 'Total Observations (Supabase)', String(d.total_observations), 'neutral'),
+      card('🎯', 'Session Events', String(d.session_events), 'neutral'),
+    ].join('');
+
+    const s = d.latest_sensors || {};
+    sensorGrid.innerHTML = [
+      card('🌡️', 'Temperature', `${s.temp ?? 0}°C`, 'neutral'),
+      card('💧', 'Humidity', `${s.humidity ?? 0}%`, 'neutral'),
+      card('📏', 'Distance', `${s.distance ?? 0} cm`, 'neutral'),
+      card('🏃', 'Movement', String(s.movement ?? 0), 'neutral'),
+    ].join('');
+
+    lastRefresh.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    systemGrid.innerHTML = card('🔴', 'Backend', '✕ Unreachable', 'fail');
+    sensorGrid.innerHTML = '';
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

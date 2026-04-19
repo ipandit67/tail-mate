@@ -27,6 +27,13 @@
   .timeline-col h3{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px;}
   .event-card{background:#2d3439;border-radius:8px;padding:12px 14px;margin-bottom:10px;cursor:pointer;border:1px solid transparent;transition:border 0.15s;}
   .event-card:hover{border-color:#4A7C59;}
+  @keyframes eventSlideDown {
+    from { opacity: 0; transform: translateY(-12px); max-height: 0; padding-top: 0; padding-bottom: 0; margin-bottom: 0; }
+    to   { opacity: 1; transform: translateY(0); max-height: 200px; padding-top: 12px; padding-bottom: 12px; margin-bottom: 10px; }
+  }
+  .event-card.new-card{
+    animation: eventSlideDown 200ms ease-out;
+  }
   .event-card .ec-species{font-size:16px;font-weight:700;color:#f0ede8;}
   .event-card .ec-approach{font-size:12px;margin:4px 0;color:#aaa;}
   .event-card .ec-time{font-size:11px;color:#666;}
@@ -96,22 +103,26 @@ function renderDetection(ev) {
   `;
 }
 
-function renderTimeline(events) {
-  if (events.length === 0) {
-    eventTimeline.innerHTML = '<p class="no-events">No events yet this session.</p>';
-    return;
+function makeEventCard(ev, isNew) {
+  const color = approachabilityColor(ev.approachability);
+  const card = document.createElement('div');
+  card.className = 'event-card' + (isNew ? ' new-card' : '');
+  card.innerHTML = `
+    <div class="ec-species">${ev.species}</div>
+    <div class="ec-approach" style="color:${color}">${ev.approachability}</div>
+    <div class="ec-time">${ev.timestamp}</div>
+  `;
+  card.addEventListener('click', () => { window.parent.location.href = 'journal.html'; });
+  if (isNew) {
+    setTimeout(() => card.classList.remove('new-card'), 250);
   }
-  eventTimeline.innerHTML = events.slice().reverse().map((ev, i) => `
-    <div class="event-card" onclick="openJournalEntry(${events.length - 1 - i})">
-      <div class="ec-species">${ev.species}</div>
-      <div class="ec-approach">${ev.approachability}</div>
-      <div class="ec-time">${ev.timestamp}</div>
-    </div>
-  `).join('');
+  return card;
 }
 
-function openJournalEntry(index) {
-  window.parent.location.href = 'journal.html';
+function prependEventCard(ev) {
+  const placeholder = eventTimeline.querySelector('.no-events');
+  if (placeholder) placeholder.remove();
+  eventTimeline.insertBefore(makeEventCard(ev, true), eventTimeline.firstChild);
 }
 
 function triggerBanner() {
@@ -120,17 +131,28 @@ function triggerBanner() {
   bannerTimeout = setTimeout(() => eventBanner.classList.remove('active'), 5000);
 }
 
+function showNavBadge() {
+  // Signal parent page via localStorage flag; index.html watches and adds the badge
+  try {
+    localStorage.setItem('livefeed_new_event', '1');
+    // Dispatch storage event manually (storage event only fires across windows)
+    window.dispatchEvent(new StorageEvent('storage', { key: 'livefeed_new_event', newValue: '1' }));
+  } catch(e) {}
+}
+
 async function pollEvents() {
   try {
     const res = await fetch('http://localhost:8000/events');
     if (!res.ok) return;
     const events = await res.json();
     if (events.length > lastEventCount) {
+      const newEvents = events.slice(lastEventCount);
+      newEvents.forEach(ev => prependEventCard(ev));
       renderDetection(events[events.length - 1]);
       triggerBanner();
+      showNavBadge();
       lastEventCount = events.length;
     }
-    renderTimeline(events);
   } catch (e) {
     // backend offline, ignore
   }

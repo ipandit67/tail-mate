@@ -97,6 +97,20 @@
 
   const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
 
+  function normalizeObs(o) {
+    return {
+      ...o,
+      species: o.species_name ?? o.species,
+      status: o.conservation_status ?? o.status,
+      venomous: o.is_venomous ?? o.venomous,
+      habitat: o.habitat ?? (o.habitat_match ? 'in' : 'out'),
+      lat: o.latitude ?? o.lat,
+      lon: o.longitude ?? o.lon,
+      temp: o.temperature ?? o.temp,
+      distance: o.distance_cm ?? o.distance,
+    };
+  }
+
   async function loadStats() {
     let observations = mockObservations;
 
@@ -107,7 +121,7 @@
           .select('*');
 
         if (response.data && response.data.length > 0) {
-          observations = response.data;
+          observations = response.data.map(normalizeObs);
         }
       } catch (error) {
         console.error('Failed to load observations:', error);

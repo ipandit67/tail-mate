@@ -1,11 +1,13 @@
 import cv2
 import io
 import os
+import random
 import pandas as pd
 import json
 import queue
 import threading
 import numpy as np
+import requests as http_requests
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
@@ -16,6 +18,14 @@ from supabase import create_client
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
+
+# --- TEST MODE ---
+TEST_MODE = True
+TEST_SPECIES = ["Western Fence Lizard", "Southern Pacific Rattlesnake", "Southern Alligator Lizard", "Orange-throated Whiptail"]
+
+# --- ARDUINO DEVICE IPs ---
+DEVICE1_IP = "tailmate.local"
+DEVICE2_IP = "tailmate2.local"
 
 
 @app.route('/')
@@ -28,7 +38,7 @@ SUPABASE_URL = "https://kazkfrgbnsatagfckjpa.supabase.co"
 SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImthemtmcmdibnNhdGFnZmNranBhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjU0Nzg3NiwiZXhwIjoyMDkyMTIzODc2fQ.Z40rSTsoQufUqM81ICBCxEIGab9cL88sS8t1eRrO8W8"
 supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# --- REVIEW QUEUE ---
+# --- REVIEW STATE (display only — no confirmation flow) ---
 review_queue = queue.Queue()
 current_review = {"state": "awaiting"}
 
@@ -37,10 +47,29 @@ session_events = []
 
 # --- LATEST SENSOR READINGS ---
 latest_sensors = {"temp": 0, "humidity": 0, "distance": 0, "movement": 0}
+latest_sensor_timestamp = None
 
 # --- GEMINI CONFIGURATION ---
 genai.configure(api_key="AIzaSyDgZ5Ge4rtpnopI0QCqKRtgMb18uzUo12U")
 model = genai.GenerativeModel('gemini-1.5-flash')
+
+
+# ==========================================
+# BACKGROUND: ARDUINO SENSOR POLLING
+# ==========================================
+def poll_sensors():
+    global latest_sensors, latest_sensor_timestamp
+    while True:
+        import time
+        for ip, label in [(DEVICE1_IP, "Device1"), (DEVICE2_IP, "Device2")]:
+            try:
+                resp = http_requests.get(f"http://{ip}:8000/sensors", timeout=3)
+                data = resp.json()
+                latest_sensors.update({k: v for k, v in data.items() if k in latest_sensors})
+                latest_sensor_timestamp = datetime.now().isoformat()
+            except Exception as e:
+                print(f"Sensor poll failed ({label}): {e}")
+        time.sleep(5)
 
 @app.route('/upload_capture', methods=['POST'])
 def handle_arduino_trigger():
@@ -142,6 +171,197 @@ VENOMOUS_SPECIES = {"Red Diamond Rattlesnake", "Southern Pacific Rattlesnake"}
 
 
 # ==========================================
+# RELOCATION GUIDANCE DATABASE
+# ==========================================
+RELOCATION_GUIDANCE = {
+    "Western Fence Lizard": {
+        "safe_to_handle": True,
+        "handling_method": "Gentle towel method — drape a soft cloth over the lizard, scoop carefully without squeezing the abdomen.",
+        "relocation_steps": [
+            "Approach calmly from the side, avoiding shadows over the animal.",
+            "Drape a light towel over the lizard to reduce stress.",
+            "Cup hands beneath the body, supporting the torso.",
+            "Walk to nearest rocky, sunny area within 500m of capture point.",
+            "Place lizard on a warm rock surface and step back quietly."
+        ],
+        "contact_agencies": [
+            {"name": "San Diego Wildlife Services (if injured)", "phone": "619-225-9202"}
+        ],
+        "do_not": [
+            "Do not relocate more than 500m from capture point.",
+            "Do not handle by the tail — autotomy (tail drop) will occur."
+        ]
+    },
+    "Southern Pacific Rattlesnake": {
+        "safe_to_handle": False,
+        "handling_method": "DO NOT HANDLE. Maintain a minimum 2-meter distance at all times.",
+        "relocation_steps": [
+            "Clear all people and pets from the immediate area (3m radius).",
+            "Mark exact GPS location using your phone or GPS device.",
+            "Photograph the snake from a safe distance for identification.",
+            "Call San Diego County Vector Control: 858-694-2888.",
+            "If injured, call CA Dept Fish & Wildlife: 858-467-4201.",
+            "Wait for trained professional response — do not leave area unattended if children/pets nearby."
+        ],
+        "contact_agencies": [
+            {"name": "San Diego County Vector Control", "phone": "858-694-2888"},
+            {"name": "CA Dept Fish & Wildlife (injured animal)", "phone": "858-467-4201"}
+        ],
+        "do_not": [
+            "Do not attempt capture under any circumstances.",
+            "Do not corner the animal — provide a clear escape path.",
+            "Do not approach within 2 meters (strike range).",
+            "Do not handle even if appears dead — reflexive bites occur post-mortem."
+        ]
+    },
+    "Southern Alligator Lizard": {
+        "safe_to_handle": True,
+        "handling_method": "Use thick leather gloves — these lizards bite hard and may draw blood.",
+        "relocation_steps": [
+            "Put on thick leather or rose-pruning gloves.",
+            "Approach slowly from behind to avoid triggering defensive bite.",
+            "Grip firmly behind the head and support the body — never the tail.",
+            "Relocate to dense shrubby vegetation near a moisture source (creek, drainage).",
+            "Release at ground level under cover of vegetation."
+        ],
+        "contact_agencies": [
+            {"name": "San Diego Herpetological Society (if injured)", "phone": "858-715-9510"}
+        ],
+        "do_not": [
+            "Do not handle the tail — autotomy risk and tail will not regenerate fully.",
+            "Do not handle without thick gloves — bite force can puncture skin.",
+            "Do not relocate to dry open areas — they require moisture."
+        ]
+    },
+    "Orange-throated Whiptail": {
+        "safe_to_handle": False,
+        "handling_method": "VULNERABLE SPECIES — minimize handling. Use a soft catch bag only if absolutely necessary.",
+        "relocation_steps": [
+            "Document encounter with photographs and exact GPS coordinates.",
+            "Note substrate, vegetation, and time of day.",
+            "Do NOT relocate — observe and report only.",
+            "Submit observation to iNaturalist immediately.",
+            "Notify CA Dept Fish & Wildlife if outside documented range.",
+            "If handling is medically necessary, use a soft cotton catch bag only."
+        ],
+        "contact_agencies": [
+            {"name": "CA Dept Fish & Wildlife", "phone": "858-467-4201"},
+            {"name": "iNaturalist", "phone": "https://inaturalist.org"}
+        ],
+        "do_not": [
+            "Do not relocate — protected species under CA Fish & Game Code.",
+            "Do not handle without permit unless animal is in immediate danger.",
+            "Do not disturb surrounding habitat."
+        ]
+    },
+    "Western Skink": {
+        "safe_to_handle": True,
+        "handling_method": "Handle gently — these animals are small and easily injured. Cup hands loosely.",
+        "relocation_steps": [
+            "Cup hands loosely around the skink, supporting the full body.",
+            "Walk to nearest moist soil area near logs or rocks.",
+            "Place gently on the substrate and allow self-release.",
+            "Photograph location for documentation."
+        ],
+        "contact_agencies": [
+            {"name": "San Diego Natural History Museum (unusual location)", "phone": "619-232-3821"}
+        ],
+        "do_not": [
+            "Do not handle the tail — bright blue tail readily detaches.",
+            "Do not relocate to dry open ground."
+        ]
+    },
+    "California King Snake": {
+        "safe_to_handle": True,
+        "handling_method": "Use a snake hook or pillow case method. Non-venomous but may musk or bite defensively.",
+        "relocation_steps": [
+            "Approach with snake hook from the side.",
+            "Lift gently mid-body and guide into a pillow case or snake bag.",
+            "Tie the bag loosely and transport to release site.",
+            "Release into nearest riparian or brushy habitat.",
+            "Open bag and step back — allow snake to exit on its own time."
+        ],
+        "contact_agencies": [
+            {"name": "CA Dept Fish & Wildlife (out of range)", "phone": "858-467-4201"}
+        ],
+        "do_not": [
+            "Do not grab by the tail — risk of spinal injury.",
+            "Do not relocate to highly developed areas."
+        ]
+    },
+    "Western Side-blotched Lizard": {
+        "safe_to_handle": True,
+        "handling_method": "Cup hands gently — these are small, fast lizards that startle easily.",
+        "relocation_steps": [
+            "Approach slowly to minimize stress response.",
+            "Cup loosely with both hands.",
+            "Relocate to open sandy ground with scattered rocks.",
+            "Release on warm substrate and step back."
+        ],
+        "contact_agencies": [
+            {"name": "San Diego Wildlife Services (if injured)", "phone": "619-225-9202"}
+        ],
+        "do_not": [
+            "Do not handle the tail.",
+            "Low priority for agency contact unless visibly injured."
+        ]
+    },
+    "San Diegan Legless Lizard": {
+        "safe_to_handle": False,
+        "handling_method": "VULNERABLE — DO NOT HANDLE without permit and training. Extremely fragile body structure.",
+        "relocation_steps": [
+            "Do NOT touch or move the animal.",
+            "Document exact GPS location to within 1 meter accuracy.",
+            "Photograph the substrate (sand composition, vegetation, moisture).",
+            "Photograph the animal without flash if possible.",
+            "Contact CDFW and SD Natural History Museum immediately.",
+            "Stay nearby (5m+) to deter accidental disturbance until professionals arrive."
+        ],
+        "contact_agencies": [
+            {"name": "CA Dept Fish & Wildlife", "phone": "858-467-4201"},
+            {"name": "San Diego Natural History Museum", "phone": "619-232-3821"}
+        ],
+        "do_not": [
+            "Do not handle without specialized training — body is extremely delicate.",
+            "Do not disturb the surrounding soil or vegetation.",
+            "Do not use flash photography at close range."
+        ]
+    },
+    "_unknown": {
+        "safe_to_handle": False,
+        "handling_method": "DO NOT HANDLE unknown species. Misidentification can be fatal if animal is venomous.",
+        "relocation_steps": [
+            "Maintain a safe distance (minimum 3 meters).",
+            "Photograph from multiple angles for identification.",
+            "Submit photo and GPS to iNaturalist for species ID.",
+            "Contact San Diego Natural History Museum for confirmation.",
+            "Do not return to the area until species is identified."
+        ],
+        "contact_agencies": [
+            {"name": "San Diego Natural History Museum", "phone": "619-232-3821"},
+            {"name": "iNaturalist", "phone": "https://inaturalist.org"}
+        ],
+        "do_not": [
+            "Do not handle until species is positively identified.",
+            "Do not assume non-venomous status."
+        ]
+    }
+}
+
+
+def get_relocation_guidance(species_name):
+    if species_name in RELOCATION_GUIDANCE:
+        return RELOCATION_GUIDANCE[species_name]
+    name_lower = species_name.lower()
+    for key in RELOCATION_GUIDANCE:
+        if key == "_unknown":
+            continue
+        if key.lower() in name_lower or name_lower in key.lower():
+            return RELOCATION_GUIDANCE[key]
+    return RELOCATION_GUIDANCE["_unknown"]
+
+
+# ==========================================
 # 2. ML & LOGIC LAYER
 # ==========================================
 def fuzzy_lookup(species_name):
@@ -183,13 +403,102 @@ def get_approachability(is_venomous, alert, habitat_ok, status_text):
     return "Approach Safely"
 
 
+# ==========================================
+# ANIMAL HEALTH ASSESSMENT ENGINE
+# ==========================================
+def assess_animal_health(species, temp, humidity, distance, in_habitat, is_venomous):
+    flags = []
+    severity = "green"  # green | orange | red
+
+    def bump(level):
+        nonlocal severity
+        order = {"green": 0, "orange": 1, "red": 2}
+        if order[level] > order[severity]:
+            severity = level
+
+    # Temperature rules
+    if temp > 38:
+        flags.append({"icon": "🔥", "level": "red", "text": "Critical heat stress — reptile body temperature dangerously elevated"})
+        bump("red")
+    elif temp > 32:
+        flags.append({"icon": "🌡️", "level": "orange", "text": "Elevated thermal stress — reptile likely seeking shade"})
+        bump("orange")
+    elif temp < 10:
+        flags.append({"icon": "❄️", "level": "orange", "text": "Hypothermic risk — reptile mobility severely reduced"})
+        bump("orange")
+    elif 18 <= temp <= 30:
+        flags.append({"icon": "✓", "level": "green", "text": "Optimal thermal range"})
+
+    # Humidity rules
+    if humidity < 20:
+        flags.append({"icon": "💧", "level": "red", "text": "Critically low humidity — dehydration risk high"})
+        bump("red")
+    elif humidity < 35:
+        flags.append({"icon": "💧", "level": "orange", "text": "Low humidity — monitor for dehydration"})
+        bump("orange")
+    elif humidity > 85:
+        flags.append({"icon": "💦", "level": "orange", "text": "High humidity — fungal infection risk for some species"})
+        bump("orange")
+
+    # Distance rules
+    if distance < 20 and is_venomous:
+        flags.append({"icon": "⚠️", "level": "red", "text": "CRITICAL: Dangerously close to venomous animal — back away immediately"})
+        bump("red")
+    elif distance < 50 and is_venomous:
+        flags.append({"icon": "⚠️", "level": "orange", "text": "Warning: Within strike range of venomous species"})
+        bump("orange")
+    elif distance < 30 and not is_venomous:
+        flags.append({"icon": "⚠️", "level": "orange", "text": "Very close encounter — animal may feel threatened"})
+        bump("orange")
+
+    # Habitat rules
+    if not in_habitat:
+        flags.append({"icon": "🗺️", "level": "orange", "text": "Species outside documented range — possible displacement or climate shift"})
+        bump("orange")
+
+    # Combined stress index
+    if temp > 35 and humidity < 25:
+        flags.append({"icon": "🔥", "level": "red", "text": "Combined heat and dehydration stress — animal in survival mode"})
+        bump("red")
+    if not in_habitat and (temp > 33 or temp < 12):
+        flags.append({"icon": "🚨", "level": "red", "text": "Displaced animal in thermal stress — intervention may be needed"})
+        bump("red")
+
+    color_map = {"green": "#4A7C59", "orange": "#E8923A", "red": "#C0392B"}
+
+    if severity == "red":
+        recommendations = "Animal is in critical condition. Maintain safe distance and contact wildlife professionals immediately."
+    elif severity == "orange":
+        recommendations = "Animal is experiencing measurable stress. Observe carefully and avoid disturbing the animal further."
+    else:
+        recommendations = "Animal appears healthy and within optimal field conditions for the species."
+
+    return {
+        "health_status": severity.upper(),
+        "health_color": color_map[severity],
+        "health_flags": flags,
+        "recommendations": recommendations,
+    }
+
+
+MOCK_NOTES = {
+    "Western Fence Lizard": "Common diurnal lizard with blue belly patches. Often seen basking on rocks and fences across San Diego.",
+    "Southern Pacific Rattlesnake": "Venomous pit viper with distinct rattle. Active at dawn/dusk in rocky chaparral habitats.",
+    "Southern Alligator Lizard": "Long-bodied lizard with armored scales. Bites defensively — found in moist understory.",
+    "Orange-throated Whiptail": "Vulnerable species with bright orange throat. Fast-moving, active mid-day in coastal sage scrub.",
+}
+
+
 def generate_species_notes(species_name):
+    if TEST_MODE:
+        return MOCK_NOTES.get(species_name, f"Field note placeholder for {species_name}.")
     try:
         prompt = f"Write a brief 2-3 sentence field note about {species_name} in San Diego. Focus on identifying features and behavior. Keep it under 150 characters."
-        response = client.models.generate_content(model='gemini-1.5-flash', contents=[prompt])
+        response = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt])
         return response.text.strip()
     except Exception as e:
-        return f"Unable to generate notes: {str(e)}"
+        # Compact error so it doesn't pollute the notes column with multi-KB blobs
+        return f"Notes unavailable: {type(e).__name__}"
 
 
 # ==========================================
@@ -262,9 +571,13 @@ def handle_arduino_trigger():
     # Signal video feed to flash red for 2 seconds
     _motion_flash_until = __import__('time').time() + 2
 
-    prompt = "Identify this San Diego reptile. Give me ONLY the common name."
-    response = client.models.generate_content(model='gemini-1.5-flash', contents=[prompt, img])
-    detected_species = response.text.strip()
+    if TEST_MODE:
+        detected_species = random.choice(TEST_SPECIES)
+        print(f"TEST MODE: skipping Gemini, using mock species: {detected_species}")
+    else:
+        prompt = "Identify this San Diego reptile. Give me ONLY the common name."
+        response = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt, img])
+        detected_species = response.text.strip()
     lat = float(request.form.get('lat', 32.880))
     lon = float(request.form.get('lon', -117.235))
 
@@ -276,6 +589,56 @@ def handle_arduino_trigger():
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     notes = generate_species_notes(detected_species)
+
+    # Health assessment
+    health = assess_animal_health(detected_species, temp, humidity, distance, habitat_ok, is_venomous)
+
+    # Relocation guidance
+    relocation = get_relocation_guidance(detected_species)
+    relocation_needed = (not habitat_ok) or (health["health_status"] in ("RED", "ORANGE")) or is_venomous
+
+    # Map to the actual Supabase observations schema column names
+    full_record = {
+        "species_name": detected_species,
+        "alert_color": alert_color,
+        "conservation_status": status_text,
+        "habitat_match": habitat_ok,
+        "is_venomous": is_venomous,
+        "approachability": approachability,
+        "confidence": 92,
+        "latitude": lat,
+        "longitude": lon,
+        "temperature": temp,
+        "humidity": humidity,
+        "distance_cm": distance,
+        "timestamp": timestamp,
+        "image_url": image_url,
+        "notes": notes,
+        "health_status": health["health_status"],
+        "health_flags": json.dumps(health["health_flags"]),
+        "relocation_needed": relocation_needed,
+    }
+
+    saved_ok = False
+    record = dict(full_record)
+    # Retry up to N times, dropping any column the schema rejects.
+    for _attempt in range(len(full_record)):
+        try:
+            supabase_client.table("observations").insert(record).execute()
+            saved_ok = True
+            break
+        except Exception as e:
+            msg = str(e)
+            # Parse "Could not find the 'COLNAME' column" and drop it
+            import re
+            m = re.search(r"Could not find the '([^']+)' column", msg)
+            if m and m.group(1) in record:
+                bad_col = m.group(1)
+                del record[bad_col]
+                print(f"Auto-save: dropping unknown column '{bad_col}', retrying")
+                continue
+            print(f"Auto-save to Supabase failed: {e}")
+            break
 
     current_review = {
         "state": "result",
@@ -295,6 +658,14 @@ def handle_arduino_trigger():
         "timestamp": timestamp,
         "image_url": image_url,
         "notes": notes,
+        "health_status": health["health_status"],
+        "health_color": health["health_color"],
+        "health_flags": health["health_flags"],
+        "recommendations": health["recommendations"],
+        "relocation": relocation,
+        "relocation_needed": relocation_needed,
+        "saved": saved_ok,
+        "sea_temp": 19.2,
     }
     review_queue.put(current_review.copy())
 
@@ -305,12 +676,14 @@ def handle_arduino_trigger():
         "confidence": 92,
         "image_url": image_url,
         "notes": notes,
+        "health_status": health["health_status"],
     })
 
     return jsonify({
         "species": detected_species,
         "alert": alert_color,
-        "status": status_text
+        "status": status_text,
+        "saved": saved_ok,
     })
 
 
@@ -325,11 +698,17 @@ def video_feed():
             if cap.isOpened():
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 cam = cap
                 break
 
         if cam is None:
             return
+
+        # Flush stale/black initialization frames from the camera buffer
+        for _ in range(10):
+            cam.read()
+            time.sleep(0.05)
 
         prev_gray = None
         try:
@@ -364,82 +743,207 @@ def video_feed():
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
+# ==========================================
+# REVIEW PAGE — full field intelligence briefing (display only)
+# ==========================================
 REVIEW_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
-<title>TailMate Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TailMate Field Briefing</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Roboto+Condensed:wght@400;700&display=swap" rel="stylesheet"/>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
-  html,body{height:100%;background:#F5F0E8;font-family:'Roboto Condensed',sans-serif;color:#2C3E2D;}
-  #app{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;}
+  html,body{background:#F5F0E8;font-family:'Roboto Condensed',sans-serif;color:#2C3E2D;min-height:100vh;}
+  .topbar{background:#2C3E2D;color:#F5F0E8;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;font-size:14px;letter-spacing:1px;}
+  .topbar .logo{font-family:'Playfair Display',serif;font-size:22px;}
+  .topbar .meta{font-size:12px;color:#bbb;text-align:right;line-height:1.5;}
+  #app{padding:20px 16px 40px;max-width:560px;margin:0 auto;}
+  .awaiting{min-height:80vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;}
   .emoji{font-size:80px;margin-bottom:16px;}
-  .awaiting-title{font-family:'Playfair Display',serif;font-size:28px;color:#2C3E2D;}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
   .pulse{animation:pulse 2s infinite;}
   .spinner{width:48px;height:48px;border:5px solid #ddd;border-top-color:#4A6B8A;border-radius:50%;animation:spin 0.9s linear infinite;margin:0 auto 20px;}
   @keyframes spin{to{transform:rotate(360deg);}}
-  .processing-title{font-size:22px;color:#4A6B8A;margin-bottom:16px;}
-  .sensor-box{background:#fff;border-radius:12px;padding:16px 24px;margin-top:8px;font-size:15px;color:#4A6B8A;line-height:2;}
-  .species-name{font-size:48px;font-weight:700;color:#2C3E2D;margin-bottom:12px;line-height:1.1;}
-  .badge{display:inline-block;padding:10px 28px;border-radius:50px;font-size:26px;font-weight:700;color:#fff;margin-bottom:16px;}
-  .venomous-warn{background:#C0392B;color:#fff;border-radius:8px;padding:10px 20px;font-size:18px;font-weight:700;margin-bottom:12px;}
-  .info-row{font-size:16px;margin:6px 0;color:#2C3E2D;}
-  .confidence{font-size:32px;font-weight:700;color:#4A6B8A;margin:12px 0;}
-  .btn-row{display:flex;gap:16px;margin-top:24px;width:100%;max-width:400px;}
-  .btn{flex:1;padding:18px;border:none;border-radius:14px;font-family:'Roboto Condensed',sans-serif;font-size:20px;font-weight:700;cursor:pointer;color:#fff;}
-  .btn-confirm{background:#4A7C59;}
-  .btn-reject{background:#C0392B;}
+  .card{background:#fff;border-radius:14px;padding:20px;margin-bottom:14px;box-shadow:0 2px 12px rgba(0,0,0,0.06);}
+  .card-label{font-size:11px;letter-spacing:2px;color:#888;text-transform:uppercase;margin-bottom:10px;font-weight:700;}
+  .species-name{font-family:'Playfair Display',serif;font-size:38px;color:#2C3E2D;line-height:1.1;margin-bottom:6px;}
+  .conf-line{font-size:14px;color:#4A6B8A;margin-bottom:14px;}
+  .badge{display:inline-block;padding:10px 22px;border-radius:50px;font-size:18px;font-weight:700;color:#fff;margin-bottom:10px;}
+  .venomous-warn{background:#C0392B;color:#fff;border-radius:8px;padding:10px 16px;font-size:16px;font-weight:700;margin:8px 0;text-align:center;letter-spacing:1px;}
+  .info-row{font-size:14px;margin:6px 0;color:#2C3E2D;}
+  .info-row b{color:#4A6B8A;}
+  .health-pill{display:inline-block;padding:8px 18px;border-radius:30px;color:#fff;font-weight:700;font-size:15px;margin-bottom:12px;letter-spacing:1px;}
+  .health-flag{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:#F5F0E8;border-radius:8px;margin-bottom:6px;font-size:13px;border-left:4px solid;}
+  .flag-icon{font-size:18px;flex-shrink:0;}
+  .flag-text{flex:1;line-height:1.4;}
+  .recs{font-size:13px;color:#4A6B8A;margin-top:12px;font-style:italic;line-height:1.5;}
+  .env-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .env-item{background:#F5F0E8;border-radius:8px;padding:10px 12px;}
+  .env-item .lbl{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;}
+  .env-item .val{font-size:18px;font-weight:700;margin-top:2px;}
+  .env-item.warn{border-left:4px solid #E8923A;}
+  .env-item.danger{border-left:4px solid #C0392B;}
+  .env-item.ok{border-left:4px solid #4A7C59;}
+  .reloc-handle{display:flex;align-items:center;gap:10px;padding:12px;background:#F5F0E8;border-radius:8px;margin-bottom:10px;font-weight:700;}
+  .reloc-handle.safe{border-left:5px solid #4A7C59;color:#4A7C59;}
+  .reloc-handle.unsafe{border-left:5px solid #C0392B;color:#C0392B;}
+  .reloc-method{font-size:13px;color:#2C3E2D;background:#F5F0E8;padding:10px 12px;border-radius:8px;margin-bottom:12px;line-height:1.5;}
+  .reloc-steps{counter-reset:step;list-style:none;padding:0;margin:0 0 12px;}
+  .reloc-steps li{counter-increment:step;padding:8px 0 8px 36px;position:relative;font-size:13px;line-height:1.45;border-bottom:1px solid #eee;}
+  .reloc-steps li::before{content:counter(step);position:absolute;left:0;top:7px;background:#4A7C59;color:#fff;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;}
+  .reloc-steps li:last-child{border-bottom:none;}
+  .reloc-agencies{margin-bottom:12px;}
+  .agency{display:block;padding:10px 12px;background:#4A6B8A;color:#fff;border-radius:8px;text-decoration:none;margin-bottom:6px;font-size:14px;font-weight:700;}
+  .agency:hover{background:#3a5571;}
+  .donot-list{background:#FCEAE7;border:1px solid #C0392B;border-radius:8px;padding:10px 12px;}
+  .donot-list .donot-title{color:#C0392B;font-weight:700;font-size:12px;letter-spacing:2px;margin-bottom:6px;}
+  .donot-list ul{list-style:none;padding:0;}
+  .donot-list li{font-size:13px;color:#A8281C;padding:4px 0 4px 16px;position:relative;}
+  .donot-list li::before{content:'✕';position:absolute;left:0;color:#C0392B;font-weight:700;}
+  .saved-indicator{text-align:center;padding:12px;color:#4A7C59;font-weight:700;font-size:14px;background:#E8F2EB;border-radius:8px;margin-top:12px;}
+  .saved-indicator.fail{color:#C0392B;background:#FCEAE7;}
 </style>
 </head>
 <body>
+<div class="topbar">
+  <div class="logo">🐍 TailMate</div>
+  <div class="meta" id="topbar-meta">—</div>
+</div>
 <div id="app">
-  <div class="emoji pulse">🐍</div>
-  <div class="awaiting-title">Awaiting capture…</div>
+  <div class="awaiting"><div class="emoji pulse">🐍</div><div style="font-family:'Playfair Display',serif;font-size:24px;">Awaiting capture…</div></div>
 </div>
 <script>
 const app = document.getElementById('app');
+const topbarMeta = document.getElementById('topbar-meta');
 const es = new EventSource('/stream');
-es.onmessage = function(e) {
-  const d = JSON.parse(e.data);
-  if(d.state === 'awaiting') {
-    app.innerHTML = `<div class="emoji pulse">🐍</div><div class="awaiting-title">Awaiting capture…</div>`;
-  } else if(d.state === 'processing') {
-    app.innerHTML = `
-      <div class="spinner"></div>
-      <div class="processing-title">Identifying species…</div>
-      <div class="sensor-box">
-        🌡️ Temp: <b>${d.temp}°C</b><br>
-        💧 Humidity: <b>${d.humidity}%</b><br>
-        📏 Distance: <b>${d.distance} cm</b>
+
+function envClass(metric, value) {
+  if (metric === 'temp') {
+    if (value > 38 || value < 10) return 'danger';
+    if (value > 32) return 'warn';
+    return 'ok';
+  }
+  if (metric === 'humidity') {
+    if (value < 20) return 'danger';
+    if (value < 35 || value > 85) return 'warn';
+    return 'ok';
+  }
+  if (metric === 'distance') {
+    if (value < 20) return 'danger';
+    if (value < 50) return 'warn';
+    return 'ok';
+  }
+  return '';
+}
+
+function renderResult(d) {
+  topbarMeta.innerHTML = `${d.timestamp}<br>${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}`;
+
+  const venomHtml = d.venomous ? `<div class="venomous-warn">⚠ VENOMOUS SPECIES</div>` : '';
+
+  const flagsHtml = (d.health_flags || []).map(f => {
+    const colorMap = {green:'#4A7C59', orange:'#E8923A', red:'#C0392B'};
+    return `<div class="health-flag" style="border-color:${colorMap[f.level]};">
+      <div class="flag-icon">${f.icon}</div>
+      <div class="flag-text">${f.text}</div>
+    </div>`;
+  }).join('');
+
+  const tempCls = envClass('temp', d.temp);
+  const humCls = envClass('humidity', d.humidity);
+  const distCls = envClass('distance', d.distance);
+  const proxNote = (d.distance < 50 && d.venomous) ? '<div style="color:#C0392B;font-size:11px;margin-top:4px;font-weight:700;">⚠ STRIKE RANGE</div>' : '';
+
+  const showReloc = (!d.habitat_match) || (d.health_status === 'RED' || d.health_status === 'ORANGE') || d.venomous;
+  const r = d.relocation || {};
+  let relocHtml = '';
+  if (showReloc && r.handling_method) {
+    const safeCls = r.safe_to_handle ? 'safe' : 'unsafe';
+    const safeIcon = r.safe_to_handle ? '✓ SAFE TO HANDLE' : '✕ DO NOT HANDLE';
+    const stepsHtml = (r.relocation_steps || []).map(s => `<li>${s}</li>`).join('');
+    const agenciesHtml = (r.contact_agencies || []).map(a => {
+      const phoneHref = a.phone.startsWith('http') ? a.phone : `tel:${a.phone.replace(/[^0-9+]/g, '')}`;
+      return `<a class="agency" href="${phoneHref}">📞 ${a.name}<br><span style="font-weight:400;font-size:13px;">${a.phone}</span></a>`;
+    }).join('');
+    const donotHtml = (r.do_not || []).map(x => `<li>${x}</li>`).join('');
+    relocHtml = `
+      <div class="card">
+        <div class="card-label">Relocation Guidance</div>
+        <div class="reloc-handle ${safeCls}">${safeIcon}</div>
+        <div class="reloc-method">${r.handling_method}</div>
+        <div class="card-label" style="margin-top:14px;">Steps</div>
+        <ol class="reloc-steps">${stepsHtml}</ol>
+        <div class="card-label">Contact Agencies</div>
+        <div class="reloc-agencies">${agenciesHtml}</div>
+        <div class="donot-list">
+          <div class="donot-title">DO NOT</div>
+          <ul>${donotHtml}</ul>
+        </div>
       </div>`;
-  } else if(d.state === 'result') {
-    const venomHtml = d.venomous ? `<div class="venomous-warn">⚠️ VENOMOUS</div>` : '';
-    app.innerHTML = `
+  }
+
+  const savedHtml = d.saved
+    ? `<div class="saved-indicator">Saved to field log ✓</div>`
+    : `<div class="saved-indicator fail">Save failed — check connection</div>`;
+
+  app.innerHTML = `
+    <div class="card">
+      <div class="card-label">Species Identification</div>
       <div class="species-name">${d.species}</div>
+      <div class="conf-line">${d.confidence}% AI confidence</div>
       <div class="badge" style="background:${d.approachability_color}">${d.approachability}</div>
       ${venomHtml}
       <div class="info-row">📋 Conservation: <b>${d.status}</b></div>
-      <div class="info-row">🗺️ Habitat Match: <b>${d.habitat_match ? 'Yes' : 'No (Outside Range)'}</b></div>
-      <div class="confidence">${d.confidence}% confidence</div>
-      <div class="sensor-box">
-        🌡️ Temp: <b>${d.temp}°C</b> &nbsp;|&nbsp; 💧 Humidity: <b>${d.humidity}%</b><br>
-        📏 Distance: <b>${d.distance} cm</b> &nbsp;|&nbsp; 📍 <b>${d.lat}, ${d.lon}</b>
+      <div class="info-row">🗺️ Habitat: <b>${d.habitat_match ? 'In documented range ✓' : 'Outside documented range ⚠'}</b></div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Animal Health Assessment</div>
+      <div class="health-pill" style="background:${d.health_color}">${d.health_status}</div>
+      ${flagsHtml}
+      <div class="recs">${d.recommendations || ''}</div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Environmental Conditions</div>
+      <div class="env-grid">
+        <div class="env-item ${tempCls}"><div class="lbl">Temp</div><div class="val">${d.temp}°C</div></div>
+        <div class="env-item ${humCls}"><div class="lbl">Humidity</div><div class="val">${d.humidity}%</div></div>
+        <div class="env-item ${distCls}"><div class="lbl">Distance</div><div class="val">${d.distance} cm</div>${proxNote}</div>
+        <div class="env-item ok"><div class="lbl">Scripps SST</div><div class="val">${d.sea_temp || 19.2}°C</div></div>
       </div>
-      <div class="btn-row">
-        <button class="btn btn-confirm" onclick="confirm_()">✔ Confirm</button>
-        <button class="btn btn-reject" onclick="reject()">✖ Reject</button>
+    </div>
+
+    ${relocHtml}
+
+    ${savedHtml}
+  `;
+}
+
+es.onmessage = function(e) {
+  const d = JSON.parse(e.data);
+  if (!d.state) return;
+  if(d.state === 'awaiting') {
+    topbarMeta.innerHTML = '—';
+    app.innerHTML = `<div class="awaiting"><div class="emoji pulse">🐍</div><div style="font-family:'Playfair Display',serif;font-size:24px;">Awaiting capture…</div></div>`;
+  } else if(d.state === 'processing') {
+    topbarMeta.innerHTML = 'Processing…';
+    app.innerHTML = `
+      <div class="awaiting">
+        <div class="spinner"></div>
+        <div style="font-size:18px;color:#4A6B8A;margin-bottom:14px;">Identifying species…</div>
+        <div style="background:#fff;border-radius:12px;padding:16px 24px;font-size:14px;color:#4A6B8A;line-height:2;">
+          🌡️ Temp: <b>${d.temp}°C</b><br>
+          💧 Humidity: <b>${d.humidity}%</b><br>
+          📏 Distance: <b>${d.distance} cm</b>
+        </div>
       </div>`;
+  } else if(d.state === 'result') {
+    renderResult(d);
   }
 };
-function confirm_() {
-  fetch('/confirm', {method:'POST'}).then(r=>r.json()).then(d=>{ if(d.success) alert('Saved!'); });
-}
-function reject() {
-  fetch('/reject', {method:'POST'});
-}
 </script>
 </body>
 </html>"""
@@ -464,38 +968,29 @@ def stream():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.route('/confirm', methods=['POST'])
-def confirm():
-    global current_review
-    if current_review.get('state') != 'result':
-        return jsonify({"success": False, "error": "No result to confirm"})
-    record = {
-        "species": current_review.get("species"),
-        "alert": current_review.get("alert"),
-        "status": current_review.get("status"),
-        "habitat_match": current_review.get("habitat_match"),
-        "venomous": current_review.get("venomous"),
-        "approachability": current_review.get("approachability"),
-        "confidence": current_review.get("confidence"),
-        "lat": current_review.get("lat"),
-        "lon": current_review.get("lon"),
-        "temp": current_review.get("temp"),
-        "humidity": current_review.get("humidity"),
-        "distance": current_review.get("distance"),
-        "timestamp": current_review.get("timestamp"),
-        "image_url": current_review.get("image_url", ""),
-    }
-    supabase_client.table("observations").insert(record).execute()
-    return jsonify({"success": True})
+@app.route('/status', methods=['GET'])
+def status():
+    supabase_ok = False
+    total_observations = 0
+    try:
+        result = supabase_client.table("observations").select("id", count="exact").execute()
+        total_observations = result.count if result.count is not None else len(result.data)
+        supabase_ok = True
+    except Exception:
+        pass
+
+    return jsonify({
+        "test_mode": TEST_MODE,
+        "gemini_key_present": bool(GEMINI_API_KEY),
+        "supabase_connected": supabase_ok,
+        "last_sensor_time": latest_sensor_timestamp,
+        "total_observations": total_observations,
+        "session_events": len(session_events),
+        "latest_sensors": latest_sensors,
+    })
 
 
-@app.route('/reject', methods=['POST'])
-def reject():
-    global current_review
-    current_review = {"state": "awaiting"}
-    review_queue.put(current_review.copy())
-    return jsonify({"success": True})
-
+threading.Thread(target=poll_sensors, daemon=True).start()
 
 if __name__ == '__main__':
     print("FieldLog Backend Active on http://localhost:8000")

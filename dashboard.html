@@ -120,6 +120,18 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }
+
+  @keyframes newRowFlash {
+    0%   { background-color: rgba(74, 124, 89, 0.18); }
+    100% { background-color: transparent; }
+  }
+  .journal-row.new-arrival::before {
+    background-color: var(--primary-green) !important;
+    transition: background-color 2s ease;
+  }
+  .journal-row.new-arrival {
+    animation: newRowFlash 2s ease-out;
+  }
 </style>
 
 <div class="log-header">
@@ -135,6 +147,8 @@
 
   const index = document.getElementById('journal-index');
   const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
+  const knownIds = new Set();
+  let firstLoad = true;
 
   function getBadgeClass(approachability) {
     if (approachability === 'Approach Safely') return 'approach-safe';
@@ -181,6 +195,27 @@
     return `<div class="awaiting-pulse">Awaiting field observations…</div>`;
   }
 
+  // Normalize Supabase row shape to the renderer's expected fields
+  function normalizeObs(o) {
+    return {
+      id: o.id,
+      species: o.species_name ?? o.species,
+      timestamp: o.timestamp,
+      confidence: o.confidence,
+      status: o.conservation_status ?? o.status,
+      venomous: o.is_venomous ?? o.venomous,
+      approachability: o.approachability,
+      habitat: o.habitat ?? (o.habitat_match ? 'in' : 'out'),
+      lat: o.latitude ?? o.lat,
+      lon: o.longitude ?? o.lon,
+      temp: o.temperature ?? o.temp,
+      humidity: o.humidity,
+      distance: o.distance_cm ?? o.distance,
+      image_url: o.image_url,
+      notes: o.notes,
+    };
+  }
+
   async function loadLog() {
     let observations = [];
 
@@ -191,11 +226,23 @@
         .from('observations')
         .select('*')
         .order('timestamp', { ascending: false });
-      observations = (response.data && response.data.length > 0) ? response.data : mockObservations;
+      observations = (response.data && response.data.length > 0)
+        ? response.data.map(normalizeObs)
+        : mockObservations;
     }
 
     document.getElementById('entry-count').textContent =
       `${observations.length} entr${observations.length === 1 ? 'y' : 'ies'}`;
+
+    // Identify newly arrived IDs (skip flash on the very first render)
+    const newIds = new Set();
+    if (!firstLoad) {
+      observations.forEach(obs => {
+        if (!knownIds.has(obs.id)) newIds.add(obs.id);
+      });
+    }
+    observations.forEach(obs => knownIds.add(obs.id));
+    firstLoad = false;
 
     index.innerHTML = observations.length > 0
       ? observations.map(renderRow).join('')
@@ -203,10 +250,15 @@
 
     index.querySelectorAll('.journal-row').forEach(row => {
       row.addEventListener('click', () => openEntry(row.dataset.id));
+      if (newIds.has(row.dataset.id)) {
+        row.classList.add('new-arrival');
+        setTimeout(() => row.classList.remove('new-arrival'), 2000);
+      }
     });
   }
 
   loadLog();
+  setInterval(loadLog, 5000);
 
   if (!isGuest) {
     supabase.channel('observations')

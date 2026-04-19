@@ -8,8 +8,83 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+  <style>
+    /* --- Smooth tab transitions --- */
+    #main-content {
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 200ms ease, transform 200ms ease;
+    }
+    #main-content.fade-out {
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 150ms ease, transform 150ms ease;
+    }
+    #main-content.fade-in {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+
+    /* --- Top progress bar --- */
+    #tab-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 3px;
+      width: 0%;
+      background: var(--primary-green, #4A7C59);
+      z-index: 9999;
+      transition: width 0.3s ease, opacity 0.3s ease;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #tab-progress.active {
+      opacity: 1;
+    }
+
+    /* --- Live Feed nav badge --- */
+    nav button {
+      position: relative;
+    }
+    nav button .nav-new-badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 2px 6px;
+      background: #C0392B;
+      color: #fff;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      animation: navBadgeBlink 0.8s infinite;
+      vertical-align: middle;
+    }
+    @keyframes navBadgeBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+
+    /* --- Footer status link --- */
+    .footer-bar {
+      text-align: center;
+      padding: 14px 12px 18px;
+      font-size: 12px;
+      color: var(--slate-blue, #4A6B8A);
+    }
+    .footer-bar a {
+      color: var(--slate-blue, #4A6B8A);
+      text-decoration: none;
+      opacity: 0.6;
+      transition: opacity 150ms ease;
+    }
+    .footer-bar a:hover {
+      opacity: 1;
+    }
+  </style>
 </head>
 <body>
+  <div id="tab-progress"></div>
+
   <header>
     <a href="/" class="wordmark">
       <div class="wordmark-icon">🐍</div>
@@ -38,6 +113,10 @@
 
   <main id="main-content"></main>
 
+  <footer class="footer-bar">
+    <a href="status.html" title="System Status">⚙ status</a>
+  </footer>
+
   <script type="module">
     import { checkAuthState, startGeolocation, startClock, setActiveNav } from './app.js';
     import { signOut } from './supabase.js';
@@ -64,12 +143,54 @@
     });
     startClock();
 
-    // Navigation
+    // --- Navigation ---
     const navButtons = document.querySelectorAll('nav button');
     const mainContent = document.getElementById('main-content');
+    const progressBar = document.getElementById('tab-progress');
+
+    function startProgress() {
+      progressBar.style.transition = 'none';
+      progressBar.style.width = '0%';
+      progressBar.classList.add('active');
+      // force reflow
+      void progressBar.offsetWidth;
+      progressBar.style.transition = 'width 0.3s ease, opacity 0.3s ease';
+      progressBar.style.width = '70%';
+    }
+
+    function finishProgress() {
+      progressBar.style.width = '100%';
+      setTimeout(() => {
+        progressBar.classList.remove('active');
+        setTimeout(() => { progressBar.style.width = '0%'; }, 300);
+      }, 200);
+    }
+
+    // --- Live Feed badge management via localStorage ---
+    function checkLiveFeedBadge() {
+      const liveFeedBtn = document.querySelector('nav button[data-tab="livefeed"]');
+      if (!liveFeedBtn) return;
+      const hasNew = localStorage.getItem('livefeed_new_event') === '1';
+      const existing = liveFeedBtn.querySelector('.nav-new-badge');
+      if (hasNew && !existing) {
+        const badge = document.createElement('span');
+        badge.className = 'nav-new-badge';
+        badge.textContent = 'NEW';
+        liveFeedBtn.appendChild(badge);
+      } else if (!hasNew && existing) {
+        existing.remove();
+      }
+    }
+    setInterval(checkLiveFeedBadge, 1000);
+    window.addEventListener('storage', checkLiveFeedBadge);
 
     async function loadTab(tabName) {
       setActiveNav(tabName);
+      startProgress();
+
+      mainContent.classList.add('fade-out');
+      await new Promise(resolve => setTimeout(resolve, 150));
+
       try {
         const response = await fetch(`${tabName}.html`);
         const html = await response.text();
@@ -91,16 +212,33 @@
         console.error('Failed to load tab:', error);
         mainContent.innerHTML = '<p>Failed to load content</p>';
       }
+
+      // fade in
+      mainContent.classList.remove('fade-out');
+      mainContent.classList.add('fade-in');
+      void mainContent.offsetWidth;
+      requestAnimationFrame(() => {
+        mainContent.style.opacity = '';
+        mainContent.style.transform = '';
+        mainContent.classList.remove('fade-in');
+      });
+
+      finishProgress();
     }
 
     navButtons.forEach(button => {
       button.addEventListener('click', () => {
+        if (button.dataset.tab === 'livefeed') {
+          localStorage.removeItem('livefeed_new_event');
+          checkLiveFeedBadge();
+        }
         loadTab(button.dataset.tab);
       });
     });
 
     // Load dashboard by default
     loadTab('dashboard');
+    checkLiveFeedBadge();
   </script>
 </body>
 </html>

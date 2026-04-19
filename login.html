@@ -74,8 +74,39 @@
     .tab-button:hover { color: var(--primary-green); }
     .tab-button.active { color: var(--primary-green); border-bottom-color: var(--primary-green); }
 
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
+    /* Cross-fade tabs by always rendering both, toggling opacity */
+    .tab-content {
+      display: none;
+      opacity: 0;
+      transition: opacity 220ms ease;
+    }
+    .tab-content.active {
+      display: block;
+      opacity: 1;
+    }
+    .tab-content.fading-out {
+      display: block;
+      opacity: 0;
+    }
+
+    /* Login box entrance */
+    @keyframes loginBoxEnter {
+      from { opacity: 0; transform: scale(0.96); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    .login-box {
+      animation: loginBoxEnter 320ms ease-out;
+    }
+
+    /* Error slide-down */
+    @keyframes errorSlideDown {
+      from { opacity: 0; transform: translateY(-6px); max-height: 0; }
+      to   { opacity: 1; transform: translateY(0); max-height: 80px; }
+    }
+    .error:not(:empty) {
+      animation: errorSlideDown 220ms ease-out;
+      overflow: hidden;
+    }
 
     .form-group { margin-bottom: 1.5rem; }
     .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 500; color: var(--dark-text); }
@@ -178,9 +209,19 @@
     document.querySelectorAll('.tab-button').forEach(button => {
       button.addEventListener('click', () => {
         document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
         button.classList.add('active');
-        document.getElementById(button.dataset.tab).classList.add('active');
+
+        const target = document.getElementById(button.dataset.tab);
+        document.querySelectorAll('.tab-content').forEach(c => {
+          if (c === target) return;
+          if (c.classList.contains('active')) {
+            c.classList.add('fading-out');
+            c.classList.remove('active');
+            setTimeout(() => c.classList.remove('fading-out'), 220);
+          }
+        });
+        // Stagger the incoming fade so the cross-fade is visible
+        setTimeout(() => target.classList.add('active'), 60);
       });
     });
 

@@ -7,6 +7,31 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <style>
+    @keyframes journalEnter {
+      from { opacity: 0; transform: scale(0.97); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    .journal-page {
+      animation: journalEnter 250ms ease-out;
+      transform-origin: center top;
+    }
+    .back-button {
+      transition: color 200ms ease, background-color 200ms ease, border-color 200ms ease;
+    }
+    .journal-editable,
+    .journal-species-name,
+    .field-notes-area {
+      transition: border-color 200ms ease, box-shadow 200ms ease;
+    }
+    .journal-editable:focus,
+    .journal-species-name:focus,
+    .field-notes-area:focus {
+      border-color: var(--primary-green, #4A7C59);
+      box-shadow: 0 0 0 3px rgba(74, 124, 89, 0.12);
+      outline: none;
+    }
+  </style>
 </head>
 <body>
   <div class="journal-page-wrap">
@@ -361,12 +386,27 @@
       });
     }
 
+    function normalizeObs(o) {
+      if (!o) return o;
+      return {
+        ...o,
+        species: o.species_name ?? o.species,
+        status: o.conservation_status ?? o.status,
+        venomous: o.is_venomous ?? o.venomous,
+        habitat: o.habitat ?? (o.habitat_match ? 'in' : 'out'),
+        lat: o.latitude ?? o.lat,
+        lon: o.longitude ?? o.lon,
+        temp: o.temperature ?? o.temp,
+        distance: o.distance_cm ?? o.distance,
+      };
+    }
+
     async function loadObservation() {
       if (isGuest) {
         obs = mockObservations.find(o => o.id === obsId) || mockObservations[0];
       } else {
         const result = await getObservationById(obsId);
-        obs = result.success ? result.data : (mockObservations.find(o => o.id === obsId) || mockObservations[0]);
+        obs = result.success ? normalizeObs(result.data) : (mockObservations.find(o => o.id === obsId) || mockObservations[0]);
       }
       if (obs) renderJournal(obs);
     }
