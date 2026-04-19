@@ -14,6 +14,7 @@ from datetime import datetime
 import google.generativeai as genai
 import PIL.Image  # For handling the photo
 from supabase import create_client
+from PIL import Image
 
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -472,13 +473,28 @@ def events():
 def handle_arduino_trigger():
     global current_review, _motion_flash_until
 
-    img_file = request.files['image']
-    img_bytes = img_file.read()
-    img = PIL.Image.open(io.BytesIO(img_bytes))
+    # --- NEW: SCREENSHOT CAPTURE LOGIC ---
+    # 1. Open the local camera to take a high-res snapshot
+    cap = cv2.VideoCapture(0) 
+    # Give the camera a split second to adjust to light
+    for _ in range(5): cap.read() 
+    ret, frame = cap.read()
+    cap.release() 
 
-    temp = float(request.form.get('temp') or latest_sensors['temp'])
-    humidity = float(request.form.get('humidity') or latest_sensors['humidity'])
-    distance = float(request.form.get('distance') or latest_sensors['distance'])
+    if not ret:
+        print("Camera capture failed!")
+        # Fallback to the uploaded file if capture fails
+        img_file = request.files['image']
+        img_bytes = img_file.read()
+        img = PIL.Image.open(io.BytesIO(img_bytes))
+    else:
+        # 2. Convert the captured frame to Gemini-friendly format
+        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = PIL.Image.fromarray(img_rgb)
+        
+        # 3. Convert frame to bytes to stay compatible with your Supabase upload
+        is_success, buffer = cv2.imencode(".jpg", frame)
+        img_bytes = buffer.tobytes()
 
     current_review = {
         "state": "processing",
@@ -516,7 +532,7 @@ def handle_arduino_trigger():
         print(f"TEST MODE: skipping Gemini, using mock species: {detected_species}")
     else:
         prompt = "Identify this San Diego reptile. Give me ONLY the common name."
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt, img])
+        response = models.generate_content(model='gemini-2.0-flash', contents=[prompt, img])
         detected_species = response.text.strip()
     lat = float(request.form.get('lat', 32.880))
     lon = float(request.form.get('lon', -117.235))

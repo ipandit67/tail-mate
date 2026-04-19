@@ -181,11 +181,30 @@
         existing.remove();
       }
     }
+    // --- Auto-refresh current tab when a new event is detected ---
+function handleExternalEvents() {
+    const hasNew = localStorage.getItem('livefeed_new_event') === '1';
+    if (hasNew) {
+        const currentTab = document.querySelector('nav button.active').dataset.tab;
+        // If the user is currently on the Dashboard, refresh it to show the new screenshot
+        if (currentTab === 'dashboard') {
+            loadTab('dashboard');
+            // Reset the flag so it doesn't loop forever
+            localStorage.removeItem('livefeed_new_event');
+        }
+    }
+}
+// Check for new screenshots every 3 seconds
+setInterval(handleExternalEvents, 3000);
     setInterval(checkLiveFeedBadge, 1000);
     window.addEventListener('storage', checkLiveFeedBadge);
 
     async function loadTab(tabName) {
       setActiveNav(tabName);
+      if (tabName === 'dashboard' || tabName === 'livefeed') {
+    localStorage.removeItem('livefeed_new_event');
+    checkLiveFeedBadge();
+}
       startProgress();
 
       mainContent.classList.add('fade-out');

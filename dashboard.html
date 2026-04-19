@@ -23,30 +23,31 @@
   .journal-index {
     background-color: var(--card-bg);
     border-radius: 0 0 8px 8px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
     overflow: hidden;
   }
 
   .journal-row {
     display: grid;
-    grid-template-columns: 80px 1fr auto;
+    grid-template-columns: 80px 60px 1fr auto;
+    /* Added a 60px column */
     align-items: center;
-    gap: 1.5rem;
+    gap: 1rem;
     padding: 1rem 1.5rem;
     cursor: pointer;
     border-bottom: 1px solid #e8e4dc;
-    background-image: repeating-linear-gradient(
-      transparent,
-      transparent 31px,
-      #ddd6c8 31px,
-      #ddd6c8 32px
-    );
+    background-image: repeating-linear-gradient(transparent,
+        transparent 31px,
+        #ddd6c8 31px,
+        #ddd6c8 32px);
     background-position: 0 8px;
     transition: background-color 0.15s ease;
     position: relative;
   }
 
-  .journal-row:last-child { border-bottom: none; }
+  .journal-row:last-child {
+    border-bottom: none;
+  }
 
   .journal-row:hover {
     background-color: rgba(74, 124, 89, 0.04);
@@ -65,6 +66,16 @@
 
   .journal-row:hover::before {
     background-color: var(--primary-green);
+  }
+
+  /* Add this to your <style> block */
+  .entry-thumbnail {
+    width: 60px;
+    height: 60px;
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid #ddd6c8;
+    background-color: #f0f0f0;
   }
 
   .entry-date {
@@ -117,18 +128,32 @@
   }
 
   @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.5;
+    }
   }
 
   @keyframes newRowFlash {
-    0%   { background-color: rgba(74, 124, 89, 0.18); }
-    100% { background-color: transparent; }
+    0% {
+      background-color: rgba(74, 124, 89, 0.18);
+    }
+
+    100% {
+      background-color: transparent;
+    }
   }
+
   .journal-row.new-arrival::before {
     background-color: var(--primary-green) !important;
     transition: background-color 2s ease;
   }
+
   .journal-row.new-arrival {
     animation: newRowFlash 2s ease-out;
   }
@@ -167,7 +192,7 @@
     const badgeClass = getBadgeClass(obs.approachability);
     const habitatIcon = obs.habitat === 'in' ? '✓' : '⚠';
     const habitatColor = obs.habitat === 'in' ? 'var(--primary-green)' : 'var(--accent-orange)';
-
+    const thumbUrl = obs.image_url ? obs.image_url : 'static/assets/placeholder_reptile.jpg';
     return `
       <div class="journal-row" data-id="${obs.id}">
         <div class="entry-date">
