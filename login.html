@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TailMate - Field Research</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .login-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background-color: var(--bg-cream);
+      padding: 2rem;
+    }
+
+    .login-box {
+      background-color: var(--card-bg);
+      padding: 3rem;
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      width: 100%;
+      max-width: 400px;
+    }
+
+    .logo-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+
+    .logo-icon {
+      width: 4rem;
+      height: 4rem;
+      background: linear-gradient(135deg, var(--primary-green), var(--accent-orange));
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+
+    .logo-text {
+      font-family: 'Playfair Display', serif;
+      font-size: 2rem;
+      color: var(--dark-text);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 2rem;
+      border-bottom: 2px solid var(--light-gray);
+    }
+
+    .tab-button {
+      flex: 1;
+      background: none;
+      border: none;
+      padding: 1rem;
+      font-family: 'Roboto Condensed', sans-serif;
+      font-size: 1rem;
+      color: var(--dark-text);
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: all 0.3s ease;
+    }
+
+    .tab-button:hover { color: var(--primary-green); }
+    .tab-button.active { color: var(--primary-green); border-bottom-color: var(--primary-green); }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .form-group { margin-bottom: 1.5rem; }
+    .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 500; color: var(--dark-text); }
+    .form-group input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid var(--light-gray);
+      border-radius: 4px;
+      font-family: 'Roboto Condensed', sans-serif;
+      font-size: 1rem;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--primary-green);
+      box-shadow: 0 0 0 3px rgba(74, 124, 89, 0.1);
+    }
+
+    .submit-button {
+      width: 100%;
+      background-color: var(--primary-green);
+      color: white;
+      border: none;
+      padding: 0.75rem;
+      border-radius: 4px;
+      font-family: 'Roboto Condensed', sans-serif;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    .submit-button:hover { background-color: #3d6349; }
+
+    .guest-button {
+      width: 100%;
+      background-color: var(--slate-blue);
+      color: white;
+      border: none;
+      padding: 0.75rem;
+      border-radius: 4px;
+      font-family: 'Roboto Condensed', sans-serif;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 1rem;
+      transition: background-color 0.3s ease;
+    }
+    .guest-button:hover { background-color: #3a4f67; }
+
+    .error { color: var(--red-alert); font-size: 0.9rem; margin-top: 0.75rem; }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-box">
+      <div class="logo-container">
+        <div class="logo-icon">🐍</div>
+        <div class="logo-text">TailMate</div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-button active" data-tab="login">Log In</button>
+        <button class="tab-button" data-tab="signup">Sign Up</button>
+      </div>
+
+      <div id="login" class="tab-content active">
+        <form id="login-form">
+          <div class="form-group">
+            <label for="login-username">Username</label>
+            <input type="text" id="login-username" autocomplete="username" required>
+          </div>
+          <div class="form-group">
+            <label for="login-password">Password</label>
+            <input type="password" id="login-password" autocomplete="current-password" required>
+          </div>
+          <button type="submit" class="submit-button">Log In</button>
+          <div id="login-error" class="error"></div>
+        </form>
+      </div>
+
+      <div id="signup" class="tab-content">
+        <form id="signup-form">
+          <div class="form-group">
+            <label for="signup-username">Username</label>
+            <input type="text" id="signup-username" autocomplete="username" required>
+          </div>
+          <div class="form-group">
+            <label for="signup-password">Password</label>
+            <input type="password" id="signup-password" autocomplete="new-password" required>
+          </div>
+          <button type="submit" class="submit-button">Sign Up</button>
+          <div id="signup-error" class="error"></div>
+        </form>
+      </div>
+
+      <button class="guest-button" id="guest-button">Continue as Guest</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { signIn, signUp } from './supabase.js';
+
+    document.querySelectorAll('.tab-button').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        button.classList.add('active');
+        document.getElementById(button.dataset.tab).classList.add('active');
+      });
+    });
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value.trim();
+      const password = document.getElementById('login-password').value;
+      const errorEl = document.getElementById('login-error');
+      errorEl.textContent = 'Signing in…';
+
+      const result = await signIn(username, password);
+      if (result.success) {
+        window.location.href = 'index.html';
+      } else {
+        errorEl.textContent = result.error;
+      }
+    });
+
+    document.getElementById('signup-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('signup-username').value.trim();
+      const password = document.getElementById('signup-password').value;
+      const errorEl = document.getElementById('signup-error');
+      errorEl.textContent = 'Creating account…';
+
+      const result = await signUp(username, password);
+      if (result.success) {
+        window.location.href = 'index.html';
+      } else {
+        errorEl.textContent = result.error;
+      }
+    });
+
+    document.getElementById('guest-button').addEventListener('click', () => {
+      window.location.href = 'index.html?guest=true';
+    });
+  </script>
+</body>
+</html>

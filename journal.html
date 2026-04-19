@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TailMate — Field Journal</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+</head>
+<body>
+  <div class="journal-page-wrap">
+    <button class="back-button" id="back-btn">← Back to Log</button>
+    <div class="journal-page" id="journal-page">
+      <div style="text-align:center; padding: 4rem; color: var(--slate-blue); font-family: 'Playfair Display', serif;">
+        Loading entry…
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { mockObservations, getApproachabilityColor, speciesData } from './app.js';
+    import { supabase, updateObservation, getObservationById, getCurrentUser } from './supabase.js';
+
+    const params = new URLSearchParams(window.location.search);
+    const obsId = params.get('id');
+    const isGuest = params.get('guest') === 'true';
+    const page = document.getElementById('journal-page');
+    let obs = null;
+    let saveTimer = null;
+    let userEditedNotes = false;
+
+    document.getElementById('back-btn').addEventListener('click', () => {
+      window.location.href = isGuest ? 'index.html?guest=true' : 'index.html';
+    });
+
+    // ── Auto-generate narrative field notes from observation data ──
+    function generateNotes(o) {
+      const date = new Date(o.timestamp);
+      const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+      const habitatKnown = speciesData[o.species]?.habitat || 'San Diego region';
+      const inRange = o.habitat === 'in';
+      const habitatLine = inRange
+        ? `Specimen confirmed within documented range (${habitatKnown}).`
+        : `Specimen detected outside typical range — habitat mismatch flagged. Known range: ${habitatKnown}.`;
+
+      const alertReason = o.approachability === 'Do Not Approach'
+        ? (o.venomous ? 'Species is venomous.' : 'Species flagged for caution.')
+        : o.approachability === 'Observe from Distance'
+        ? 'Species warrants observer distance — non-aggressive but sensitive.'
+        : 'Species presents no threat. Approach and observation permitted.';
+
+      const tempContext = o.temp
+        ? (o.temp >= 25 ? 'warm conditions favorable for ectotherm activity'
+          : o.temp >= 18 ? 'moderate ambient temperature'
+          : 'cool conditions — reduced metabolic activity expected')
+        : 'ambient temperature not recorded';
+
+      const distanceNote = o.distance
+        ? o.distance < 50
+          ? `Subject detected at close range (${o.distance}cm) — likely stationary or basking.`
+          : o.distance < 100
+          ? `Subject at mid-range distance (${o.distance}cm).`
+          : `Subject at extended range (${o.distance}cm) — possible movement detected.`
+        : '';
+
+      return [
+        `Encounter logged at ${timeStr} on ${dateStr}.`,
+        `TailMate sensor array identified ${o.species || 'unknown species'} with ${o.confidence || '—'}% AI confidence.`,
+        distanceNote,
+        ``,
+        `Assessment: ${o.approachability || 'Unknown'}. ${alertReason}`,
+        `Conservation status: ${o.status || 'Unknown'}. ${o.venomous ? 'VENOMOUS — exercise caution.' : 'Non-venomous.'}`,
+        habitatLine,
+        ``,
+        `Field conditions: ${o.temp ? o.temp + '°C' : '—'} air temperature (${tempContext}), ${o.humidity ? o.humidity + '% relative humidity' : '—'}.`,
+        `Scripps Pier sea surface: 19.2°C. Station: Scripps Pier, La Jolla.`,
+        `GPS fix: ${o.lat ? o.lat.toFixed(5) + '°N' : '—'}, ${o.lon ? Math.abs(o.lon).toFixed(5) + '°W' : '—'}.`,
+      ].filter(Boolean).join('\n');
+    }
+
+    // Typewriter effect for auto-generated notes
+    function typewriterFill(textarea, text) {
+      textarea.value = '';
+      let i = 0;
+      const speed = 12;
+      function tick() {
+        if (i < text.length) {
+          textarea.value += text[i++];
+          setTimeout(tick, speed);
+        }
+      }
+      tick();
+    }
+
+    function getBannerClass(approachability) {
+      if (approachability === 'Approach Safely') return 'green';
+      if (approachability === 'Observe from Distance') return 'orange';
+      return 'red';
+    }
+
+    function getBannerIcon(approachability) {
+      if (approachability === 'Approach Safely') return '✓';
+      if (approachability === 'Observe from Distance') return '◉';
+      return '✕';
+    }
+
+    function renderJournal(o) {
+      const date = new Date(o.timestamp);
+      const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const researcher = isGuest ? 'Guest Researcher' : (getCurrentUser() || 'Researcher');
+      const bannerClass = getBannerClass(o.approachability);
+      const bannerIcon = getBannerIcon(o.approachability);
+
+      page.innerHTML = `
+        <div class="journal-page-header">
+          <div>
+            <div class="journal-page-title">Field Journal Entry</div>
+            <div style="font-family:'DM Mono',monospace; font-size:0.8rem; color:var(--slate-blue); margin-top:0.25rem;">
+              ${dateStr} · ${timeStr}
+            </div>
+          </div>
+          <div class="journal-page-meta">
+            Researcher: <strong>${researcher}</strong><br>
+            Location: ${o.lat ? o.lat.toFixed(4) : '—'}, ${o.lon ? o.lon.toFixed(4) : '—'}<br>
+            Entry ID: ${String(o.id).slice(0,8)}
+          </div>
+        </div>
+
+        <div class="journal-photo">🐍</div>
+
+        <div class="journal-section">
+          <div class="journal-section-label">Identified Species</div>
+          <input class="journal-species-name" id="field-species" value="${o.species || ''}" placeholder="Species name…">
+        </div>
+
+        <div class="approachability-banner ${bannerClass}">
+          <span style="font-size:1.4rem;">${bannerIcon}</span>
+          <span>${o.approachability || 'Unknown'}</span>
+        </div>
+
+        <hr class="journal-section-rule">
+
+        <div class="journal-section">
+          <div class="journal-section-label">Identification Details</div>
+          <div class="journal-meta-grid">
+            <div class="journal-field">
+              <label class="journal-field-label">AI Confidence</label>
+              <input class="journal-editable" id="field-confidence" value="${o.confidence || ''}%" placeholder="e.g. 94%">
+            </div>
+            <div class="journal-field">
+              <label class="journal-field-label">Conservation Status</label>
+              <input class="journal-editable" id="field-status" value="${o.status || ''}" placeholder="Common / Vulnerable…">
+            </div>
+            <div class="journal-field">
+              <label class="journal-field-label">Venomous</label>
+              <input class="journal-editable" id="field-venomous" value="${o.venomous ? 'Yes ⚠' : 'No'}" placeholder="Yes / No">
+            </div>
+            <div class="journal-field">
+              <label class="journal-field-label">Habitat Assessment</label>
+              <input class="journal-editable" id="field-habitat" value="${o.habitat === 'in' ? 'In Range ✓' : 'Out of Range ⚠'}" placeholder="In Range / Out of Range">
+            </div>
+          </div>
+        </div>
+
+        <hr class="journal-section-rule">
+
+        <div class="journal-section">
+          <div class="journal-section-label">Sensor Readings</div>
+          <div class="journal-meta-grid">
+            <div class="journal-field">
+              <label class="journal-field-label">Temperature</label>
+              <input class="journal-editable" id="field-temp" value="${o.temp || ''}°C" placeholder="°C">
+            </div>
+            <div class="journal-field">
+              <label class="journal-field-label">Humidity</label>
+              <input class="journal-editable" id="field-humidity" value="${o.humidity || ''}%" placeholder="%">
+            </div>
+            <div class="journal-field">
+              <label class="journal-field-label">Distance</label>
+              <input class="journal-editable" id="field-distance" value="${o.distance || ''}cm" placeholder="cm">
+            </div>
+            <div class="journal-field">
+              <label class="journal-field-label">Coordinates</label>
+              <input class="journal-editable" id="field-coords"
+                value="${o.lat ? o.lat.toFixed(5) : ''}, ${o.lon ? o.lon.toFixed(5) : ''}"
+                placeholder="lat, lon">
+            </div>
+          </div>
+        </div>
+
+        <hr class="journal-section-rule">
+
+        <div class="journal-section">
+          <div class="journal-section-label">Environmental Conditions (Scripps Pier)</div>
+          <div class="journal-meta-grid">
+            <div class="journal-field">
+              <label class="journal-field-label">Sea Surface Temp</label>
+              <input class="journal-editable" id="field-sea-temp" value="19.2°C" placeholder="°C">
+            </div>
+            <div class="journal-field">
+              <label class="journal-field-label">Station</label>
+              <input class="journal-editable" id="field-station" value="Scripps Pier, La Jolla" placeholder="Station name">
+            </div>
+          </div>
+        </div>
+
+        <hr class="journal-section-rule">
+
+        <div class="journal-section">
+          <div class="journal-section-label">Observation Location</div>
+          <div class="journal-map" id="obs-map"></div>
+        </div>
+
+        <hr class="journal-section-rule">
+
+        <div class="journal-section">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+            <div class="journal-section-label" style="margin-bottom:0;">Field Notes</div>
+            <button id="regen-btn" style="background:none; border:1px solid var(--slate-blue); color:var(--slate-blue);
+              font-family:'Roboto Condensed',sans-serif; font-size:0.75rem; padding:0.3rem 0.7rem;
+              border-radius:4px; cursor:pointer; letter-spacing:0.05em;"
+              title="Regenerate notes from current sensor data">↺ Regenerate</button>
+          </div>
+          <textarea class="field-notes-area" id="field-notes" placeholder="Generating field notes…"></textarea>
+        </div>
+
+        <div class="autosave-indicator" id="autosave-status"></div>
+      `;
+
+      initMap(o.lat || 32.88, o.lon || -117.23);
+      initNotes(o);
+      attachAutoSave();
+      attachRegenButton(o);
+      if (!isGuest) subscribeToUpdates();
+    }
+
+    function initNotes(o) {
+      const textarea = document.getElementById('field-notes');
+      if (o.notes && o.notes.trim()) {
+        textarea.value = o.notes;
+      } else {
+        typewriterFill(textarea, generateNotes(o));
+      }
+    }
+
+    function attachRegenButton(o) {
+      document.getElementById('regen-btn').addEventListener('click', () => {
+        userEditedNotes = false;
+        const textarea = document.getElementById('field-notes');
+        obs = { ...obs, ...collectSensorEdits() };
+        typewriterFill(textarea, generateNotes(obs));
+      });
+    }
+
+    // Subscribe to live updates on this observation row
+    function subscribeToUpdates() {
+      supabase.channel(`obs-${obsId}`)
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'observations',
+          filter: `id=eq.${obsId}`
+        }, (payload) => {
+          const updated = payload.new;
+          obs = { ...obs, ...updated };
+
+          // Update sensor display fields silently
+          const tempEl = document.getElementById('field-temp');
+          const humEl = document.getElementById('field-humidity');
+          const distEl = document.getElementById('field-distance');
+          if (tempEl && updated.temp) tempEl.value = updated.temp + '°C';
+          if (humEl && updated.humidity) humEl.value = updated.humidity + '%';
+          if (distEl && updated.distance) distEl.value = updated.distance + 'cm';
+
+          // Regenerate notes if user hasn't manually edited them
+          if (!userEditedNotes) {
+            const textarea = document.getElementById('field-notes');
+            if (textarea) typewriterFill(textarea, generateNotes(obs));
+            showSaveStatus('Notes updated from live sensor data', 'saved');
+            setTimeout(() => showSaveStatus('', ''), 3000);
+          }
+        })
+        .subscribe();
+    }
+
+    function collectSensorEdits() {
+      return {
+        temp: parseFloat(document.getElementById('field-temp')?.value) || obs.temp,
+        humidity: parseFloat(document.getElementById('field-humidity')?.value) || obs.humidity,
+        distance: parseFloat(document.getElementById('field-distance')?.value) || obs.distance,
+      };
+    }
+
+    function initMap(lat, lon) {
+      const map = L.map('obs-map').setView([lat, lon], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+      L.circleMarker([lat, lon], {
+        radius: 10,
+        fillColor: getApproachabilityColor(obs.approachability),
+        color: '#fff',
+        weight: 2,
+        fillOpacity: 0.9
+      }).addTo(map);
+    }
+
+    function showSaveStatus(msg, cls) {
+      const el = document.getElementById('autosave-status');
+      if (!el) return;
+      el.textContent = msg;
+      el.className = `autosave-indicator ${cls}`;
+    }
+
+    function collectEdits() {
+      return {
+        species: document.getElementById('field-species')?.value,
+        confidence: parseFloat(document.getElementById('field-confidence')?.value) || obs.confidence,
+        status: document.getElementById('field-status')?.value,
+        notes: document.getElementById('field-notes')?.value,
+        temp: parseFloat(document.getElementById('field-temp')?.value) || obs.temp,
+        humidity: parseFloat(document.getElementById('field-humidity')?.value) || obs.humidity,
+        distance: parseFloat(document.getElementById('field-distance')?.value) || obs.distance,
+      };
+    }
+
+    async function save() {
+      if (isGuest) {
+        showSaveStatus('Guest mode — changes not saved', '');
+        return;
+      }
+      showSaveStatus('Saving…', 'saving');
+      const result = await updateObservation(obs.id, collectEdits());
+      if (result.success) {
+        showSaveStatus('Saved ✓', 'saved');
+        setTimeout(() => showSaveStatus('', ''), 2000);
+      } else {
+        showSaveStatus('Save failed', '');
+      }
+    }
+
+    function attachAutoSave() {
+      document.querySelectorAll('.journal-editable, .journal-species-name').forEach(el => {
+        el.addEventListener('input', () => {
+          clearTimeout(saveTimer);
+          showSaveStatus('Unsaved changes…', '');
+          saveTimer = setTimeout(save, 1200);
+        });
+      });
+
+      const notesEl = document.getElementById('field-notes');
+      notesEl.addEventListener('input', () => {
+        userEditedNotes = true;
+        clearTimeout(saveTimer);
+        showSaveStatus('Unsaved changes…', '');
+        saveTimer = setTimeout(save, 1200);
+      });
+    }
+
+    async function loadObservation() {
+      if (isGuest) {
+        obs = mockObservations.find(o => o.id === obsId) || mockObservations[0];
+      } else {
+        const result = await getObservationById(obsId);
+        obs = result.success ? result.data : (mockObservations.find(o => o.id === obsId) || mockObservations[0]);
+      }
+      if (obs) renderJournal(obs);
+    }
+
+    loadObservation();
+  </script>
+</body>
+</html>

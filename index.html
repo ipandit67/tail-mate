@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TailMate - Field Research Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+</head>
+<body>
+  <header>
+    <a href="/" class="wordmark">
+      <div class="wordmark-icon">🐍</div>
+      <span>TailMate</span>
+    </a>
+    <div class="header-right">
+      <div class="coords">
+        <span id="coords-label">Current Location</span>
+        <span class="coords-text" id="coords">---, ---</span>
+      </div>
+      <div class="clock">
+        <span id="clock-label">Time</span>
+        <span class="coords-text" id="clock-time">--:--:--</span>
+      </div>
+      <button id="logout-btn" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Logout</button>
+    </div>
+  </header>
+
+  <nav>
+    <button class="active" data-tab="dashboard">Dashboard</button>
+    <button data-tab="map">Map</button>
+    <button data-tab="species">Species Guide</button>
+    <button data-tab="stats">Statistics</button>
+  </nav>
+
+  <main id="main-content"></main>
+
+  <script type="module">
+    import { checkAuthState, startGeolocation, startClock, setActiveNav } from './app.js';
+    import { signOut } from './supabase.js';
+
+    // Check auth state on page load
+    const { user, isGuest } = await checkAuthState();
+
+    // Show/hide logout button
+    const logoutBtn = document.getElementById('logout-btn');
+    if (isGuest) {
+      logoutBtn.textContent = 'Exit Guest Mode';
+    }
+
+    logoutBtn.addEventListener('click', async () => {
+      if (!isGuest) {
+        await signOut();
+      }
+      window.location.href = '/login.html';
+    });
+
+    // Start geolocation and clock
+    startGeolocation(({ lat, lon }) => {
+      document.getElementById('coords').textContent = `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+    });
+    startClock();
+
+    // Navigation
+    const navButtons = document.querySelectorAll('nav button');
+    const mainContent = document.getElementById('main-content');
+
+    async function loadTab(tabName) {
+      setActiveNav(tabName);
+      try {
+        const response = await fetch(`${tabName}.html`);
+        const html = await response.text();
+        mainContent.innerHTML = html;
+
+        // Run scripts in loaded content
+        const scripts = mainContent.querySelectorAll('script');
+        scripts.forEach(script => {
+          const newScript = document.createElement('script');
+          newScript.type = script.type;
+          if (script.src) {
+            newScript.src = script.src;
+          } else {
+            newScript.textContent = script.textContent;
+          }
+          document.body.appendChild(newScript);
+        });
+      } catch (error) {
+        console.error('Failed to load tab:', error);
+        mainContent.innerHTML = '<p>Failed to load content</p>';
+      }
+    }
+
+    navButtons.forEach(button => {
+      button.addEventListener('click', () => {
+        loadTab(button.dataset.tab);
+      });
+    });
+
+    // Load dashboard by default
+    loadTab('dashboard');
+  </script>
+</body>
+</html>

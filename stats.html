@@ -1,0 +1,220 @@
+<style>
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+  }
+
+  .stat-card {
+    background-color: var(--card-bg);
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border-left: 4px solid var(--primary-green);
+  }
+
+  .stat-card.alert-red {
+    border-left-color: var(--red-alert);
+  }
+
+  .stat-card.alert-orange {
+    border-left-color: var(--accent-orange);
+  }
+
+  .stat-label {
+    color: var(--slate-blue);
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+  }
+
+  .stat-value {
+    font-family: 'Roboto Condensed', sans-serif;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--dark-text);
+  }
+
+  .chart-container {
+    background-color: var(--card-bg);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    margin-bottom: 2rem;
+  }
+
+  .chart-title {
+    font-family: 'Roboto Condensed', sans-serif;
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    color: var(--dark-text);
+  }
+
+  canvas {
+    max-height: 400px;
+  }
+</style>
+
+<div class="card" style="margin-bottom: 2rem;">
+  <h2>Statistics & Analytics</h2>
+  <p style="color: var(--slate-blue); font-size: 0.95rem;">Overview of field observations and detections</p>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-label">Total Observations</div>
+    <div class="stat-value" id="total-count">0</div>
+  </div>
+  <div class="stat-card alert-red">
+    <div class="stat-label">Do Not Approach</div>
+    <div class="stat-value" id="alert-red">0</div>
+  </div>
+  <div class="stat-card alert-orange">
+    <div class="stat-label">Observe from Distance</div>
+    <div class="stat-value" id="alert-orange">0</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Out of Habitat</div>
+    <div class="stat-value" id="out-habitat">0</div>
+  </div>
+</div>
+
+<div class="chart-container">
+  <div class="chart-title">Species Breakdown</div>
+  <canvas id="species-chart"></canvas>
+</div>
+
+<div class="chart-container">
+  <div class="chart-title">Approachability Distribution</div>
+  <canvas id="approachability-chart"></canvas>
+</div>
+
+<script type="module">
+  import { mockObservations } from './app.js';
+  import { supabase } from './supabase.js';
+
+  const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
+
+  async function loadStats() {
+    let observations = mockObservations;
+
+    if (!isGuest) {
+      try {
+        const response = await supabase
+          .from('observations')
+          .select('*');
+
+        if (response.data && response.data.length > 0) {
+          observations = response.data;
+        }
+      } catch (error) {
+        console.error('Failed to load observations:', error);
+      }
+    }
+
+    // Calculate stats
+    const totalCount = observations.length;
+    const alertRedCount = observations.filter(o => o.approachability === 'Do Not Approach').length;
+    const alertOrangeCount = observations.filter(o => o.approachability === 'Observe from Distance').length;
+    const outHabitatCount = observations.filter(o => o.habitat === 'out').length;
+
+    // Update stat cards
+    document.getElementById('total-count').textContent = totalCount;
+    document.getElementById('alert-red').textContent = alertRedCount;
+    document.getElementById('alert-orange').textContent = alertOrangeCount;
+    document.getElementById('out-habitat').textContent = outHabitatCount;
+
+    // Species breakdown
+    const speciesCount = {};
+    observations.forEach(obs => {
+      speciesCount[obs.species] = (speciesCount[obs.species] || 0) + 1;
+    });
+
+    const speciesLabels = Object.keys(speciesCount);
+    const speciesValues = Object.values(speciesCount);
+
+    const speciesCtx = document.getElementById('species-chart').getContext('2d');
+    new Chart(speciesCtx, {
+      type: 'bar',
+      data: {
+        labels: speciesLabels,
+        datasets: [{
+          label: 'Observations',
+          data: speciesValues,
+          backgroundColor: '#4A7C59',
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        indexAxis: 'y',
+        plugins: {
+          legend: { display: false }
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { stepSize: 1 } }
+        }
+      }
+    });
+
+    // Approachability distribution
+    const approachabilityCount = {};
+    observations.forEach(obs => {
+      approachabilityCount[obs.approachability] = (approachabilityCount[obs.approachability] || 0) + 1;
+    });
+
+    const approachLabels = Object.keys(approachabilityCount);
+    const approachValues = Object.values(approachabilityCount);
+    const approachColors = approachLabels.map(label => {
+      if (label === 'Approach Safely') return '#4A7C59';
+      if (label === 'Observe from Distance') return '#E8923A';
+      if (label === 'Do Not Approach') return '#C0392B';
+      return '#4A6B8A';
+    });
+
+    const approachCtx = document.getElementById('approachability-chart').getContext('2d');
+    new Chart(approachCtx, {
+      type: 'doughnut',
+      data: {
+        labels: approachLabels,
+        datasets: [{
+          data: approachValues,
+          backgroundColor: approachColors,
+          borderColor: '#FFFFFF',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              font: { family: "'Roboto Condensed', sans-serif" }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  loadStats();
+
+  // Subscribe to real-time updates if logged in
+  if (!isGuest) {
+    const subscription = supabase
+      .channel('observations')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'observations' },
+        (payload) => {
+          loadStats();
+        }
+      )
+      .subscribe();
+  }
+</script>

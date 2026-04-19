@@ -1,0 +1,132 @@
+<style>
+  #map {
+    height: 600px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .map-legend {
+    background-color: white;
+    padding: 1rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    margin-top: 1.5rem;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .legend-dot {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid white;
+  }
+
+  .legend-label {
+    font-family: 'Roboto Condensed', sans-serif;
+    font-size: 0.95rem;
+  }
+</style>
+
+<div id="map"></div>
+
+<div class="map-legend">
+  <h3 style="margin-bottom: 1rem; font-family: 'Roboto Condensed', sans-serif;">Legend</h3>
+  <div class="legend-item">
+    <div class="legend-dot" style="background-color: #4A7C59;"></div>
+    <span class="legend-label">Approach Safely</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background-color: #E8923A;"></div>
+    <span class="legend-label">Observe from Distance</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-dot" style="background-color: #C0392B;"></div>
+    <span class="legend-label">Do Not Approach</span>
+  </div>
+</div>
+
+<script type="module">
+  import { mockObservations, getApproachabilityColor } from './app.js';
+  import { supabase } from './supabase.js';
+
+  const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
+
+  const map = L.map('map').setView([32.88, -117.23], 13);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19
+  }).addTo(map);
+
+  function addMarker(obs) {
+    const color = getApproachabilityColor(obs.approachability);
+    const marker = L.circleMarker([obs.lat, obs.lon], {
+      radius: 8,
+      fillColor: color,
+      color: color,
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 0.8
+    }).addTo(map);
+
+    const popupContent = `
+      <div style="font-family: 'Roboto Condensed', sans-serif;">
+        <strong>${obs.species}</strong><br>
+        <span style="display: inline-block; background-color: ${color}; color: white; padding: 0.25rem 0.5rem; border-radius: 3px; font-size: 0.85rem; margin-top: 0.5rem;">
+          ${obs.approachability}
+        </span><br>
+        <span style="font-family: 'DM Mono', monospace; font-size: 0.9rem; margin-top: 0.5rem; display: block;">
+          ${obs.lat.toFixed(3)}, ${obs.lon.toFixed(3)}
+        </span>
+        <small style="color: #666; display: block; margin-top: 0.5rem;">
+          ${new Date(obs.timestamp).toLocaleString()}
+        </small>
+      </div>
+    `;
+
+    marker.bindPopup(popupContent);
+  }
+
+  async function loadMarkers() {
+    if (isGuest) {
+      mockObservations.forEach(addMarker);
+    } else {
+      try {
+        const response = await supabase
+          .from('observations')
+          .select('*');
+
+        if (response.error) {
+          mockObservations.forEach(addMarker);
+        } else {
+          const observations = response.data && response.data.length > 0 ? response.data : mockObservations;
+          observations.forEach(addMarker);
+        }
+      } catch (error) {
+        mockObservations.forEach(addMarker);
+      }
+    }
+  }
+
+  loadMarkers();
+
+  // Subscribe to real-time updates if logged in
+  if (!isGuest) {
+    const subscription = supabase
+      .channel('observations')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'observations' },
+        (payload) => {
+          addMarker(payload.new);
+        }
+      )
+      .subscribe();
+  }
+</script>
