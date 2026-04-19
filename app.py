@@ -446,17 +446,25 @@ def generate_species_notes(species_name):
 # 3. API ENDPOINTS
 # ==========================================
 
+def _safe_float(val, fallback):
+    try:
+        result = float(val)
+        import math
+        return fallback if math.isnan(result) else result
+    except (TypeError, ValueError):
+        return fallback
+
 @app.route('/sensors', methods=['POST'])
 def sensors():
     global latest_sensors, latest_sensor_timestamp
     latest_sensors = {
-        "temp": float(request.form.get('temp', latest_sensors['temp'])),
-        "humidity": float(request.form.get('humidity', latest_sensors['humidity'])),
-        "distance": float(request.form.get('distance', latest_sensors['distance'])),
-        "movement": float(request.form.get('movement', latest_sensors.get('movement', 0))),
-        "movement_x": float(request.form.get('movement_x', latest_sensors.get('movement_x', 0))),
-        "movement_y": float(request.form.get('movement_y', latest_sensors.get('movement_y', 0))),
-        "movement_z": float(request.form.get('movement_z', latest_sensors.get('movement_z', 0))),
+        "temp":       _safe_float(request.form.get('temp'),       latest_sensors.get('temp', 0)),
+        "humidity":   _safe_float(request.form.get('humidity'),   latest_sensors.get('humidity', 0)),
+        "distance":   _safe_float(request.form.get('distance'),   latest_sensors.get('distance', 0)),
+        "movement":   _safe_float(request.form.get('movement'),   latest_sensors.get('movement', 0)),
+        "movement_x": _safe_float(request.form.get('movement_x'), latest_sensors.get('movement_x', 0)),
+        "movement_y": _safe_float(request.form.get('movement_y'), latest_sensors.get('movement_y', 0)),
+        "movement_z": _safe_float(request.form.get('movement_z'), latest_sensors.get('movement_z', 0)),
     }
     latest_sensor_timestamp = datetime.now().isoformat()
     return jsonify({"success": True})
@@ -498,9 +506,9 @@ def handle_arduino_trigger():
             img_bytes = b''
             img = PIL.Image.new('RGB', (640, 480))
 
-    temp = float(request.form.get('temp') or latest_sensors['temp'])
-    humidity = float(request.form.get('humidity') or latest_sensors['humidity'])
-    distance = float(request.form.get('distance') or latest_sensors['distance'])
+    temp     = _safe_float(request.form.get('temp'),     latest_sensors.get('temp', 0))
+    humidity = _safe_float(request.form.get('humidity'), latest_sensors.get('humidity', 0))
+    distance = _safe_float(request.form.get('distance'), latest_sensors.get('distance', 0))
 
     current_review = {
         "state": "processing",
