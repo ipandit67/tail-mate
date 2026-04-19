@@ -35,8 +35,10 @@
     animation: eventSlideDown 200ms ease-out;
   }
   .event-card .ec-species{font-size:16px;font-weight:700;color:#f0ede8;}
-  .event-card .ec-approach{font-size:12px;margin:4px 0;color:#aaa;}
-  .event-card .ec-time{font-size:11px;color:#666;}
+  .event-card .ec-approach{font-size:12px;margin:4px 0;font-weight:700;}
+  .event-card .ec-time{font-size:11px;color:#666;font-family:'DM Mono',monospace;}
+  .event-card .ec-meta{font-size:11px;color:#888;margin-top:4px;display:flex;align-items:center;gap:8px;}
+  .ec-health-dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0;}
   .no-events{color:#555;font-size:13px;text-align:center;margin-top:20px;}
 </style>
 </head>
@@ -103,21 +105,45 @@ function renderDetection(ev) {
   `;
 }
 
+function healthColor(status) {
+  if (status === 'RED') return '#C0392B';
+  if (status === 'ORANGE') return '#E8923A';
+  return '#4A7C59';
+}
+
 function makeEventCard(ev, isNew) {
   const color = approachabilityColor(ev.approachability);
+  const dotColor = healthColor(ev.health_status);
   const card = document.createElement('div');
   card.className = 'event-card' + (isNew ? ' new-card' : '');
   card.innerHTML = `
     <div class="ec-species">${ev.species}</div>
     <div class="ec-approach" style="color:${color}">${ev.approachability}</div>
     <div class="ec-time">${ev.timestamp}</div>
+    <div class="ec-meta">
+      <span class="ec-health-dot" style="background:${dotColor}" title="Health: ${ev.health_status || 'GREEN'}"></span>
+      <span>${ev.confidence || 92}% confidence</span>
+    </div>
   `;
-  card.addEventListener('click', () => { window.parent.location.href = 'journal.html'; });
+  if (ev.id) {
+    card.addEventListener('click', () => { window.location.href = `journal.html?id=${ev.id}`; });
+  }
   if (isNew) {
     setTimeout(() => card.classList.remove('new-card'), 250);
   }
   return card;
 }
+
+function rebuildTimeline(events) {
+  if (!events.length) {
+    eventTimeline.innerHTML = '<p class="no-events">No events this session.</p>';
+    return;
+  }
+  eventTimeline.innerHTML = '';
+  events.forEach(ev => eventTimeline.appendChild(makeEventCard(ev, false)));
+}
+
+let knownEventIds = new Set();
 
 function prependEventCard(ev) {
   const placeholder = eventTimeline.querySelector('.no-events');
@@ -144,11 +170,17 @@ async function pollEvents() {
   try {
     const res = await fetch('http://localhost:8000/events');
     if (!res.ok) return;
-    const events = await res.json();
+    const events = await res.json(); // newest first
     if (events.length > lastEventCount) {
-      const newEvents = events.slice(lastEventCount);
-      newEvents.forEach(ev => prependEventCard(ev));
-      renderDetection(events[events.length - 1]);
+      const newCount = events.length - lastEventCount;
+      const newEvents = events.slice(0, newCount); // newest first = prepend order
+      if (lastEventCount === 0) {
+        // First load — build full list without animation
+        rebuildTimeline(events);
+      } else {
+        newEvents.forEach(ev => prependEventCard(ev));
+      }
+      renderDetection(events[0]); // most recent
       triggerBanner();
       showNavBadge();
       lastEventCount = events.length;

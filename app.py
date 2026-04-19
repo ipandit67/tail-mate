@@ -13,6 +13,7 @@ from flask_cors import CORS
 from datetime import datetime
 import google.generativeai as genai
 import PIL.Image  # For handling the photo
+from PIL import Image
 from supabase import create_client
 
 
@@ -465,16 +466,33 @@ def observations():
 
 @app.route('/events', methods=['GET'])
 def events():
-    return jsonify(session_events)
+    return jsonify(list(reversed(session_events)))
 
 
 @app.route('/upload_capture', methods=['POST'])
 def handle_arduino_trigger():
     global current_review, _motion_flash_until
 
-    img_file = request.files['image']
-    img_bytes = img_file.read()
-    img = PIL.Image.open(io.BytesIO(img_bytes))
+    # Try to capture a fresh frame directly from the local camera
+    cap = cv2.VideoCapture(0)
+    for _ in range(5): cap.read()  # flush stale frames
+    ret, frame = cap.read()
+    cap.release()
+
+    if ret:
+        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = PIL.Image.fromarray(img_rgb)
+        is_success, buffer = cv2.imencode(".jpg", frame)
+        img_bytes = buffer.tobytes()
+    else:
+        # Fallback to uploaded file if camera capture fails
+        img_file = request.files.get('image')
+        if img_file:
+            img_bytes = img_file.read()
+            img = PIL.Image.open(io.BytesIO(img_bytes))
+        else:
+            img_bytes = b''
+            img = PIL.Image.new('RGB', (640, 480))
 
     temp = float(request.form.get('temp') or latest_sensors['temp'])
     humidity = float(request.form.get('humidity') or latest_sensors['humidity'])
@@ -516,7 +534,7 @@ def handle_arduino_trigger():
         print(f"TEST MODE: skipping Gemini, using mock species: {detected_species}")
     else:
         prompt = "Identify this San Diego reptile. Give me ONLY the common name."
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt, img])
+        response = model.generate_content([prompt, img])
         detected_species = response.text.strip()
     lat = float(request.form.get('lat', 32.880))
     lon = float(request.form.get('lon', -117.235))
@@ -609,14 +627,29 @@ def handle_arduino_trigger():
     }
     review_queue.put(current_review.copy())
 
+    # Pull the saved row's id if available (retry-tolerant record may have it)
+    saved_id = None
+    try:
+        id_row = supabase_client.table("observations").select("id").order("timestamp", desc=True).limit(1).execute()
+        if id_row.data:
+            saved_id = id_row.data[0]["id"]
+    except Exception:
+        pass
+
     session_events.append({
+        "id": saved_id,
         "species": detected_species,
         "timestamp": timestamp,
         "approachability": approachability,
         "confidence": 92,
         "image_url": image_url,
-        "notes": notes,
         "health_status": health["health_status"],
+        "health_flags": health["health_flags"],
+        "lat": lat,
+        "lon": lon,
+        "venomous": is_venomous,
+        "status": status_text,
+        "habitat_match": habitat_ok,
     })
 
     return jsonify({
@@ -921,7 +954,7 @@ def status():
 
     return jsonify({
         "test_mode": TEST_MODE,
-        "gemini_key_present": bool(GEMINI_API_KEY),
+        "gemini_key_present": bool(genai.get_default_api_key() if hasattr(genai, 'get_default_api_key') else True),
         "supabase_connected": supabase_ok,
         "last_sensor_time": latest_sensor_timestamp,
         "total_observations": total_observations,

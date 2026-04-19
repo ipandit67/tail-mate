@@ -1,201 +1,122 @@
 <style>
-  .log-header {
-    margin-bottom: 0;
-    padding-bottom: 1rem;
-    border-bottom: 2px solid var(--dark-text);
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
+  .dash-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
   }
+  .dash-stat {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 1.25rem 1.25rem 1rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    border-left: 4px solid var(--primary-green);
+  }
+  .dash-stat.red { border-left-color: var(--red-alert); }
+  .dash-stat.orange { border-left-color: var(--accent-orange); }
+  .dash-stat-label { font-size: 0.8rem; color: var(--slate-blue); font-weight: 500; margin-bottom: 0.4rem; }
+  .dash-stat-value { font-family: 'Roboto Condensed', sans-serif; font-size: 2rem; font-weight: 700; color: var(--dark-text); }
 
-  .log-title {
-    font-family: 'Playfair Display', serif;
-    font-size: 1.75rem;
+  .dash-section-title {
+    font-family: 'Roboto Condensed', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
     color: var(--dark-text);
+    margin-bottom: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 
-  .log-subtitle {
-    font-family: 'DM Mono', monospace;
-    font-size: 0.85rem;
-    color: var(--slate-blue);
-  }
-
-  .journal-index {
-    background-color: var(--card-bg);
-    border-radius: 0 0 8px 8px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  #dash-map {
+    height: 300px;
+    border-radius: 8px;
     overflow: hidden;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   }
 
-  .journal-row {
+  .recent-list {
+    background: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+  .recent-row {
     display: grid;
     grid-template-columns: 80px 1fr auto;
     align-items: center;
-    gap: 1.5rem;
-    padding: 1rem 1.5rem;
-    cursor: pointer;
+    gap: 1rem;
+    padding: 0.85rem 1.25rem;
     border-bottom: 1px solid #e8e4dc;
-    background-image: repeating-linear-gradient(
-      transparent,
-      transparent 31px,
-      #ddd6c8 31px,
-      #ddd6c8 32px
-    );
-    background-position: 0 8px;
-    transition: background-color 0.15s ease;
+    cursor: pointer;
+    transition: background-color 0.12s;
     position: relative;
   }
-
-  .journal-row:last-child { border-bottom: none; }
-
-  .journal-row:hover {
-    background-color: rgba(74, 124, 89, 0.04);
+  .recent-row:last-child { border-bottom: none; }
+  .recent-row:hover { background-color: rgba(74,124,89,0.04); }
+  .recent-row::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: transparent; transition: background-color 0.12s;
   }
+  .recent-row:hover::before { background: var(--primary-green); }
+  .recent-date { font-family: 'DM Mono', monospace; font-size: 0.8rem; color: var(--slate-blue); line-height: 1.4; }
+  .recent-date span { display: block; font-size: 0.7rem; opacity: 0.65; }
+  .recent-species { font-family: 'Roboto Condensed', sans-serif; font-size: 1.1rem; font-weight: 700; color: var(--dark-text); }
+  .recent-meta { font-family: 'DM Mono', monospace; font-size: 0.75rem; color: var(--slate-blue); margin-top: 2px; }
 
-  .journal-row::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 4px;
-    background-color: transparent;
-    transition: background-color 0.15s ease;
-  }
-
-  .journal-row:hover::before {
-    background-color: var(--primary-green);
-  }
-
-  .entry-date {
+  .view-all-link {
+    text-align: right;
     font-family: 'DM Mono', monospace;
-    font-size: 0.85rem;
-    color: var(--slate-blue);
-    line-height: 1.4;
-    white-space: nowrap;
+    font-size: 0.82rem;
   }
-
-  .entry-date .entry-time {
-    display: block;
-    font-size: 0.75rem;
-    opacity: 0.7;
-  }
-
-  .entry-species {
-    font-family: 'Roboto Condensed', sans-serif;
-    font-size: 1.2rem;
+  .view-all-link a {
+    color: var(--primary-green);
+    text-decoration: none;
     font-weight: 700;
-    color: var(--dark-text);
-    line-height: 1.3;
-    word-break: break-word;
-    overflow-wrap: break-word;
   }
-
-  .entry-meta {
-    font-family: 'DM Mono', monospace;
-    font-size: 0.8rem;
-    color: var(--slate-blue);
-    margin-top: 0.2rem;
-    word-break: break-word;
-    overflow-wrap: break-word;
-  }
-
-  .entry-badge-col {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.4rem;
-  }
-
-  .awaiting-pulse {
-    text-align: center;
-    padding: 4rem 2rem;
-    color: var(--slate-blue);
-    font-family: 'Playfair Display', serif;
-    font-size: 1.1rem;
-    animation: pulse 2.5s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  }
-
-  @keyframes newRowFlash {
-    0%   { background-color: rgba(74, 124, 89, 0.18); }
-    100% { background-color: transparent; }
-  }
-  .journal-row.new-arrival::before {
-    background-color: var(--primary-green) !important;
-    transition: background-color 2s ease;
-  }
-  .journal-row.new-arrival {
-    animation: newRowFlash 2s ease-out;
-  }
+  .view-all-link a:hover { text-decoration: underline; }
 </style>
 
-<div class="log-header">
-  <span class="log-title">Field Log</span>
-  <span class="log-subtitle" id="entry-count">Loading…</span>
+<div class="card" style="margin-bottom:1.5rem;">
+  <h2>Dashboard</h2>
+  <p style="color:var(--slate-blue);font-size:0.9rem;">Field observation summary</p>
 </div>
 
-<div class="journal-index" id="journal-index"></div>
+<div class="dash-stats">
+  <div class="dash-stat">
+    <div class="dash-stat-label">Total Observations</div>
+    <div class="dash-stat-value" id="ds-total">—</div>
+  </div>
+  <div class="dash-stat red">
+    <div class="dash-stat-label">Endangered Encounters</div>
+    <div class="dash-stat-value" id="ds-endangered">—</div>
+  </div>
+  <div class="dash-stat orange">
+    <div class="dash-stat-label">Out of Habitat</div>
+    <div class="dash-stat-value" id="ds-habitat">—</div>
+  </div>
+  <div class="dash-stat red">
+    <div class="dash-stat-label">Venomous Encounters</div>
+    <div class="dash-stat-value" id="ds-venomous">—</div>
+  </div>
+</div>
+
+<div class="dash-section-title">Observation Map</div>
+<div id="dash-map"></div>
+
+<div class="dash-section-title">Recent Observations</div>
+<div class="recent-list" id="dash-recent"></div>
+<div class="view-all-link">
+  <a href="#" id="view-all-link">View all in Field Log →</a>
+</div>
 
 <script type="module">
-  import { mockObservations, formatDate, formatTimestamp } from './app.js';
+  import { mockObservations } from './app.js';
   import { supabase } from './supabase.js';
 
-  const index = document.getElementById('journal-index');
   const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
-  const knownIds = new Set();
-  let firstLoad = true;
 
-  function getBadgeClass(approachability) {
-    if (approachability === 'Approach Safely') return 'approach-safe';
-    if (approachability === 'Observe from Distance') return 'observe-distance';
-    return 'do-not-approach';
-  }
-
-  function openEntry(id) {
-    const base = window.location.href.includes('?') ? window.location.origin + '/journal.html' : 'journal.html';
-    const guestParam = isGuest ? '&guest=true' : '';
-    window.location.href = `journal.html?id=${id}${guestParam}`;
-  }
-
-  function renderRow(obs) {
-    const date = new Date(obs.timestamp);
-    const badgeClass = getBadgeClass(obs.approachability);
-    const habitatIcon = obs.habitat === 'in' ? '✓' : '⚠';
-    const habitatColor = obs.habitat === 'in' ? 'var(--primary-green)' : 'var(--accent-orange)';
-
-    return `
-      <div class="journal-row" data-id="${obs.id}">
-        <div class="entry-date">
-          ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-          <span class="entry-time">${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
-        </div>
-        <div>
-          <div class="entry-species">${obs.species}</div>
-          <div class="entry-meta">
-            <span style="color:${habitatColor}">${habitatIcon}</span>
-            ${obs.habitat === 'in' ? 'In Range' : 'Out of Range'} &nbsp;·&nbsp;
-            ${obs.confidence || '—'}% confidence &nbsp;·&nbsp;
-            ${obs.lat ? obs.lat.toFixed(3) : '—'}, ${obs.lon ? obs.lon.toFixed(3) : '—'}
-          </div>
-        </div>
-        <div class="entry-badge-col">
-          <span class="badge ${badgeClass}">${obs.approachability}</span>
-          ${obs.venomous ? '<span class="badge venomous" style="font-size:0.75rem;">⚠ Venomous</span>' : ''}
-        </div>
-      </div>
-    `;
-  }
-
-  function renderEmpty() {
-    return `<div class="awaiting-pulse">Awaiting field observations…</div>`;
-  }
-
-  // Normalize Supabase row shape to the renderer's expected fields
   function normalizeObs(o) {
     return {
       id: o.id,
@@ -205,64 +126,94 @@
       status: o.conservation_status ?? o.status,
       venomous: o.is_venomous ?? o.venomous,
       approachability: o.approachability,
-      habitat: o.habitat ?? (o.habitat_match ? 'in' : 'out'),
+      habitat: o.habitat ?? (o.habitat_match === true ? 'in' : o.habitat_match === false ? 'out' : 'in'),
       lat: o.latitude ?? o.lat,
       lon: o.longitude ?? o.lon,
-      temp: o.temperature ?? o.temp,
-      humidity: o.humidity,
-      distance: o.distance_cm ?? o.distance,
-      image_url: o.image_url,
-      notes: o.notes,
     };
   }
 
-  async function loadLog() {
-    let observations = [];
+  function approachColor(t) {
+    if (!t) return '#888';
+    if (t.includes('Do Not')) return '#C0392B';
+    if (t.includes('Observe')) return '#E8923A';
+    return '#4A7C59';
+  }
 
+  function badgeClass(t) {
+    if (t === 'Approach Safely') return 'approach-safe';
+    if (t === 'Observe from Distance') return 'observe-distance';
+    return 'do-not-approach';
+  }
+
+  async function load() {
+    let obs = [];
     if (isGuest) {
-      observations = mockObservations;
+      obs = mockObservations.map(normalizeObs);
     } else {
-      const response = await supabase
-        .from('observations')
-        .select('*')
-        .order('timestamp', { ascending: false });
-      observations = (response.data && response.data.length > 0)
-        ? response.data.map(normalizeObs)
-        : mockObservations;
-    }
-
-    document.getElementById('entry-count').textContent =
-      `${observations.length} entr${observations.length === 1 ? 'y' : 'ies'}`;
-
-    // Identify newly arrived IDs (skip flash on the very first render)
-    const newIds = new Set();
-    if (!firstLoad) {
-      observations.forEach(obs => {
-        if (!knownIds.has(obs.id)) newIds.add(obs.id);
-      });
-    }
-    observations.forEach(obs => knownIds.add(obs.id));
-    firstLoad = false;
-
-    index.innerHTML = observations.length > 0
-      ? observations.map(renderRow).join('')
-      : renderEmpty();
-
-    index.querySelectorAll('.journal-row').forEach(row => {
-      row.addEventListener('click', () => openEntry(row.dataset.id));
-      if (newIds.has(row.dataset.id)) {
-        row.classList.add('new-arrival');
-        setTimeout(() => row.classList.remove('new-arrival'), 2000);
+      try {
+        const res = await supabase.from('observations').select('*').order('timestamp', { ascending: false });
+        obs = (res.data && res.data.length > 0) ? res.data.map(normalizeObs) : mockObservations.map(normalizeObs);
+      } catch (e) {
+        obs = mockObservations.map(normalizeObs);
       }
-    });
+    }
+
+    // Stats
+    document.getElementById('ds-total').textContent = obs.length;
+    document.getElementById('ds-endangered').textContent = obs.filter(o =>
+      o.status && (o.status.includes('Threatened') || o.status.includes('Vulnerable') || o.status.includes('Endangered'))
+    ).length;
+    document.getElementById('ds-habitat').textContent = obs.filter(o => o.habitat === 'out').length;
+    document.getElementById('ds-venomous').textContent = obs.filter(o => o.venomous).length;
+
+    // Mini map
+    const mapEl = document.getElementById('dash-map');
+    if (typeof L !== 'undefined') {
+      const map = L.map(mapEl).setView([32.880, -117.235], 10);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors', maxZoom: 18
+      }).addTo(map);
+      obs.forEach(o => {
+        if (!o.lat || !o.lon) return;
+        const color = approachColor(o.approachability);
+        const marker = L.circleMarker([o.lat, o.lon], {
+          radius: 7, fillColor: color, color: '#fff', weight: 1.5, opacity: 1, fillOpacity: 0.85
+        }).addTo(map);
+        marker.bindPopup(`<b>${o.species}</b><br>${o.approachability}`);
+      });
+    } else {
+      mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--slate-blue);font-size:0.85rem;">Map unavailable</div>';
+    }
+
+    // Recent 3
+    const recent = obs.slice(0, 3);
+    const recentEl = document.getElementById('dash-recent');
+    if (!recent.length) {
+      recentEl.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--slate-blue);font-size:0.85rem;">No observations yet.</div>';
+    } else {
+      recentEl.innerHTML = recent.map(o => {
+        const d = new Date(o.timestamp);
+        const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        return `
+          <div class="recent-row" onclick="window.location.href='journal.html?id=${o.id}'">
+            <div class="recent-date">${dateStr}<span>${timeStr}</span></div>
+            <div>
+              <div class="recent-species">${o.species}</div>
+              <div class="recent-meta">${o.confidence || '—'}% conf</div>
+            </div>
+            <div><span class="badge ${badgeClass(o.approachability)}">${o.approachability}</span></div>
+          </div>`;
+      }).join('');
+    }
   }
 
-  loadLog();
-  setInterval(loadLog, 5000);
+  // "View all in Field Log" — switch tab
+  document.getElementById('view-all-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    const btn = document.querySelector('nav button[data-tab="fieldlog"]');
+    if (btn) btn.click();
+  });
 
-  if (!isGuest) {
-    supabase.channel('observations')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'observations' }, loadLog)
-      .subscribe();
-  }
+  load();
 </script>
