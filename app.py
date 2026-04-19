@@ -559,13 +559,13 @@ def handle_arduino_trigger():
     relocation = get_relocation_guidance(detected_species)
     relocation_needed = (not habitat_ok) or (health["health_status"] in ("RED", "ORANGE")) or is_venomous
 
-    # Map to the actual Supabase observations schema column names
-    full_record = {
+    # Only include columns that exist in the observations table
+    record = {
         "species_name": detected_species,
         "alert_color": alert_color,
         "conservation_status": status_text,
         "habitat_match": habitat_ok,
-        "is_venomous": is_venomous,
+        "venomous": is_venomous,
         "approachability": approachability,
         "confidence": 92,
         "latitude": lat,
@@ -574,33 +574,39 @@ def handle_arduino_trigger():
         "humidity": humidity,
         "distance_cm": distance,
         "timestamp": timestamp,
-        "image_url": image_url,
         "notes": notes,
-        "health_status": health["health_status"],
-        "health_flags": json.dumps(health["health_flags"]),
-        "relocation_needed": relocation_needed,
     }
 
     saved_ok = False
-    record = dict(full_record)
-    # Retry up to N times, dropping any column the schema rejects.
-    for _attempt in range(len(full_record)):
-        try:
-            supabase_client.table("observations").insert(record).execute()
+    saved_id = None
+    try:
+        result = supabase_client.table("observations").insert(record).execute()
+        if result.data:
             saved_ok = True
-            break
-        except Exception as e:
-            msg = str(e)
-            # Parse "Could not find the 'COLNAME' column" and drop it
-            import re
-            m = re.search(r"Could not find the '([^']+)' column", msg)
-            if m and m.group(1) in record:
-                bad_col = m.group(1)
-                del record[bad_col]
-                print(f"Auto-save: dropping unknown column '{bad_col}', retrying")
-                continue
-            print(f"Auto-save to Supabase failed: {e}")
-            break
+            saved_id = result.data[0].get("id")
+            print(f"Supabase insert OK: id={saved_id}, species={detected_species}")
+        else:
+            print(f"Supabase insert returned no data: {result}")
+    except Exception as e:
+        print(f"Supabase insert FAILED: {type(e).__name__}: {e}")
+
+    # Append to session events only after confirmed save
+    if saved_ok:
+        session_events.append({
+            "id": saved_id,
+            "species": detected_species,
+            "timestamp": timestamp,
+            "approachability": approachability,
+            "confidence": 92,
+            "image_url": image_url,
+            "health_status": health["health_status"],
+            "health_flags": health["health_flags"],
+            "lat": lat,
+            "lon": lon,
+            "venomous": is_venomous,
+            "status": status_text,
+            "habitat_match": habitat_ok,
+        })
 
     current_review = {
         "state": "result",
@@ -630,31 +636,6 @@ def handle_arduino_trigger():
         "sea_temp": 19.2,
     }
     review_queue.put(current_review.copy())
-
-    # Pull the saved row's id if available (retry-tolerant record may have it)
-    saved_id = None
-    try:
-        id_row = supabase_client.table("observations").select("id").order("timestamp", desc=True).limit(1).execute()
-        if id_row.data:
-            saved_id = id_row.data[0]["id"]
-    except Exception:
-        pass
-
-    session_events.append({
-        "id": saved_id,
-        "species": detected_species,
-        "timestamp": timestamp,
-        "approachability": approachability,
-        "confidence": 92,
-        "image_url": image_url,
-        "health_status": health["health_status"],
-        "health_flags": health["health_flags"],
-        "lat": lat,
-        "lon": lon,
-        "venomous": is_venomous,
-        "status": status_text,
-        "habitat_match": habitat_ok,
-    })
 
     return jsonify({
         "species": detected_species,
