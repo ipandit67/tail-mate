@@ -573,7 +573,7 @@ def handle_arduino_trigger():
         "alert_color": alert_color,
         "conservation_status": status_text,
         "habitat_match": habitat_ok,
-        "venomous": is_venomous,
+        "is_venomous": is_venomous,
         "approachability": approachability,
         "confidence": 92,
         "latitude": lat,
@@ -582,6 +582,7 @@ def handle_arduino_trigger():
         "humidity": humidity,
         "distance_cm": distance,
         "timestamp": timestamp,
+        "image_url": image_url,
         "notes": notes,
     }
 
