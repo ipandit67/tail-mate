@@ -71,67 +71,7 @@ def poll_sensors():
                 print(f"Sensor poll failed ({label}): {e}")
         time.sleep(5)
 
-@app.route('/upload_capture', methods=['POST'])
-def handle_arduino_trigger():
-    global current_review
-    # 1. Get the image from the Arduino/Laptop Camera
-    img_file = request.files['image']
-    img = PIL.Image.open(img_file)
 
-    temp = float(request.form.get('temp', 0))
-    humidity = float(request.form.get('humidity', 0))
-    distance = float(request.form.get('distance', 0))
-
-    # Push processing state immediately
-    current_review = {
-        "state": "processing",
-        "temp": temp,
-        "humidity": humidity,
-        "distance": distance,
-    }
-    review_queue.put(current_review.copy())
-
-    # 2. ASK THE BRAIN (The Gemini API call)
-    prompt = "Identify this San Diego reptile. Give me ONLY the common name."
-    response = model.generate_content([prompt, img])
-    detected_species = response.text.strip() # Example: "Coast Horned Lizard"
-    lat = float(request.form.get('lat', 32.880))
-    lon = float(request.form.get('lon', -117.235))
-
-    # 3. USE YOUR DATA (The Dictionary check you already have)
-    # This checks the Gemini result against your observations-712033.csv
-    alert_color, status_text, habitat_ok = analyze_capture(detected_species, lat, lon)
-
-    VENOMOUS_SPECIES = {"Red Diamond Rattlesnake", "Southern Pacific Rattlesnake"}
-    is_venomous = detected_species in VENOMOUS_SPECIES
-
-    approachability_color = "#4A7C59" if alert_color == "GREEN" else ("#E8923A" if status_text == "Common" else "#C0392B")
-
-    # Push result state
-    current_review = {
-        "state": "result",
-        "species": detected_species,
-        "alert": alert_color,
-        "status": status_text,
-        "habitat_match": habitat_ok,
-        "venomous": is_venomous,
-        "approachability_color": approachability_color,
-        "confidence": 92,
-        "lat": lat,
-        "lon": lon,
-        "temp": temp,
-        "humidity": humidity,
-        "distance": distance,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    review_queue.put(current_review.copy())
-
-    # 4. SEND RESPONSE BACK TO ARDUINO
-    return jsonify({
-        "species": detected_species,
-        "alert": alert_color,
-        "status": status_text
-    })
 # --- VIDEO FEED STATE ---
 _motion_flash_until = 0
 
