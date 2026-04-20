@@ -62,8 +62,9 @@
     // ── Auto-generate narrative field notes from observation data ──
     function generateNotes(o) {
       const date = new Date(o.timestamp);
-      const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      const tz = { timeZone: 'America/Los_Angeles' };
+      const timeStr = date.toLocaleTimeString('en-US', { ...tz, hour: '2-digit', minute: '2-digit' });
+      const dateStr = date.toLocaleDateString('en-US', { ...tz, weekday: 'long', month: 'long', day: 'numeric' });
 
       const habitatKnown = speciesData[o.species]?.habitat || 'San Diego region';
       const inRange = o.habitat === 'in';
@@ -83,18 +84,9 @@
           : 'cool conditions — reduced metabolic activity expected')
         : 'ambient temperature not recorded';
 
-      const distanceNote = o.distance
-        ? o.distance < 50
-          ? `Subject detected at close range (${o.distance}cm) — likely stationary or basking.`
-          : o.distance < 100
-          ? `Subject at mid-range distance (${o.distance}cm).`
-          : `Subject at extended range (${o.distance}cm) — possible movement detected.`
-        : '';
-
       return [
         `Encounter logged at ${timeStr} on ${dateStr}.`,
-        `TailMate sensor array identified ${o.species || 'unknown species'} with ${o.confidence || '—'}% AI confidence.`,
-        distanceNote,
+        `TailMate sensor array identified ${o.species || 'unknown species'}.`,
         ``,
         `Assessment: ${o.approachability || 'Unknown'}. ${alertReason}`,
         `Conservation status: ${o.status || 'Unknown'}. ${o.venomous ? 'VENOMOUS — exercise caution.' : 'Non-venomous.'}`,
@@ -134,8 +126,9 @@
 
     function renderJournal(o) {
       const date = new Date(o.timestamp);
-      const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-      const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const tz = { timeZone: 'America/Los_Angeles' };
+      const dateStr = date.toLocaleDateString('en-US', { ...tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      const timeStr = date.toLocaleTimeString('en-US', { ...tz, hour: '2-digit', minute: '2-digit' });
       const researcher = isGuest ? 'Guest Researcher' : (getCurrentUser() || 'Researcher');
       const bannerClass = getBannerClass(o.approachability);
       const bannerIcon = getBannerIcon(o.approachability);
@@ -155,7 +148,7 @@
           </div>
         </div>
 
-        <div class="journal-photo">🐍</div>
+        <div class="journal-photo" id="journal-photo-wrap"></div>
 
         <div class="journal-section">
           <div class="journal-section-label">Identified Species</div>
@@ -173,20 +166,16 @@
           <div class="journal-section-label">Identification Details</div>
           <div class="journal-meta-grid">
             <div class="journal-field">
-              <label class="journal-field-label">AI Confidence</label>
-              <input class="journal-editable" id="field-confidence" value="${o.confidence || ''}%" placeholder="e.g. 94%">
-            </div>
-            <div class="journal-field">
               <label class="journal-field-label">Conservation Status</label>
               <input class="journal-editable" id="field-status" value="${o.status || ''}" placeholder="Common / Vulnerable…">
             </div>
             <div class="journal-field">
               <label class="journal-field-label">Venomous</label>
-              <input class="journal-editable" id="field-venomous" value="${o.venomous ? 'Yes ⚠' : 'No'}" placeholder="Yes / No">
+              <input class="journal-editable" id="field-venomous" value="${o.venomous ? 'Yes' : 'No'}" placeholder="Yes / No">
             </div>
             <div class="journal-field">
               <label class="journal-field-label">Habitat Assessment</label>
-              <input class="journal-editable" id="field-habitat" value="${o.habitat === 'in' ? 'In Range ✓' : 'Out of Range ⚠'}" placeholder="In Range / Out of Range">
+              <input class="journal-editable" id="field-habitat" value="${o.habitat === 'in' ? 'In Range' : 'Out of Range'}" placeholder="In Range / Out of Range">
             </div>
           </div>
         </div>
@@ -203,10 +192,6 @@
             <div class="journal-field">
               <label class="journal-field-label">Humidity</label>
               <input class="journal-editable" id="field-humidity" value="${o.humidity || ''}%" placeholder="%">
-            </div>
-            <div class="journal-field">
-              <label class="journal-field-label">Distance</label>
-              <input class="journal-editable" id="field-distance" value="${o.distance || ''}cm" placeholder="cm">
             </div>
             <div class="journal-field">
               <label class="journal-field-label">Coordinates</label>
@@ -256,6 +241,12 @@
         <div class="autosave-indicator" id="autosave-status"></div>
       `;
 
+      // Show capture photo if available
+      const photoWrap = document.getElementById('journal-photo-wrap');
+      if (photoWrap && o.image_url) {
+        photoWrap.innerHTML = `<img src="${o.image_url}" alt="capture" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;">`;
+      }
+
       initMap(o.lat || 32.88, o.lon || -117.23);
       initNotes(o);
       attachAutoSave();
@@ -296,10 +287,8 @@
           // Update sensor display fields silently
           const tempEl = document.getElementById('field-temp');
           const humEl = document.getElementById('field-humidity');
-          const distEl = document.getElementById('field-distance');
           if (tempEl && updated.temp) tempEl.value = updated.temp + '°C';
           if (humEl && updated.humidity) humEl.value = updated.humidity + '%';
-          if (distEl && updated.distance) distEl.value = updated.distance + 'cm';
 
           // Regenerate notes if user hasn't manually edited them
           if (!userEditedNotes) {
@@ -316,7 +305,6 @@
       return {
         temp: parseFloat(document.getElementById('field-temp')?.value) || obs.temp,
         humidity: parseFloat(document.getElementById('field-humidity')?.value) || obs.humidity,
-        distance: parseFloat(document.getElementById('field-distance')?.value) || obs.distance,
       };
     }
 
@@ -344,12 +332,10 @@
     function collectEdits() {
       return {
         species: document.getElementById('field-species')?.value,
-        confidence: parseFloat(document.getElementById('field-confidence')?.value) || obs.confidence,
         status: document.getElementById('field-status')?.value,
         notes: document.getElementById('field-notes')?.value,
         temp: parseFloat(document.getElementById('field-temp')?.value) || obs.temp,
         humidity: parseFloat(document.getElementById('field-humidity')?.value) || obs.humidity,
-        distance: parseFloat(document.getElementById('field-distance')?.value) || obs.distance,
       };
     }
 

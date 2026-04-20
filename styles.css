@@ -89,17 +89,37 @@ nav button {
   font-size: 1rem;
   color: var(--dark-text);
   cursor: pointer;
-  border-bottom: 3px solid transparent;
-  transition: all 0.3s ease;
+  position: relative;
+  transition: color 200ms ease;
+}
+
+nav button::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--primary-green);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 200ms ease;
 }
 
 nav button:hover {
   color: var(--primary-green);
 }
 
+nav button:hover::after {
+  transform: scaleX(1);
+}
+
 nav button.active {
   color: var(--primary-green);
-  border-bottom-color: var(--primary-green);
+}
+
+nav button.active::after {
+  transform: scaleX(1);
 }
 
 main {

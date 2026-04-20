@@ -1,11 +1,8 @@
 import cv2
-import numpy as np
 import requests
 import time
 
-SENSITIVITY = 8000
-SETTLE_DELAY = 1.5
-COOLDOWN = 15
+INTERVAL = 60
 UPLOAD_URL = "http://localhost:8000/upload_capture"
 LAT = "32.8800"
 LON = "-117.2350"
@@ -22,11 +19,6 @@ def open_camera():
     raise RuntimeError("No webcam found at index 0, 1, or 2")
 
 
-def to_gray_blur(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return cv2.GaussianBlur(gray, (21, 21), 0)
-
-
 def send_capture(path):
     with open(path, "rb") as f:
         response = requests.post(
@@ -40,47 +32,23 @@ def send_capture(path):
 
 def main():
     cap = open_camera()
-    ret, prev_frame = cap.read()
-    if not ret:
-        raise RuntimeError("Failed to read initial frame from webcam")
-
-    prev_gray = to_gray_blur(prev_frame)
 
     while True:
+        print("Auto-capture triggered")
+
         ret, frame = cap.read()
-        if not ret:
-            time.sleep(0.1)
-            continue
+        if ret:
+            cv2.imwrite(CAPTURE_PATH, frame)
+            try:
+                response = send_capture(CAPTURE_PATH)
+                print("Sent to backend")
+                print(response.text)
+            except Exception as e:
+                print(f"POST failed: {e}")
+        else:
+            print("Failed to read frame from webcam")
 
-        gray = to_gray_blur(frame)
-        diff = cv2.absdiff(prev_gray, gray)
-        _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
-        non_zero = cv2.countNonZero(thresh)
-
-        if non_zero > SENSITIVITY:
-            print("Motion detected")
-            time.sleep(SETTLE_DELAY)
-
-            print("Capturing...")
-            ret, capture_frame = cap.read()
-            if ret:
-                cv2.imwrite(CAPTURE_PATH, capture_frame)
-
-                try:
-                    response = send_capture(CAPTURE_PATH)
-                    print("Sent to backend")
-                    print(response.text)
-                except Exception as e:
-                    print(f"POST failed: {e}")
-
-            time.sleep(COOLDOWN)
-
-            ret, frame = cap.read()
-            if ret:
-                gray = to_gray_blur(frame)
-
-        prev_gray = gray
-        time.sleep(0.05)
+        time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":

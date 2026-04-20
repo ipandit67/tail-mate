@@ -56,6 +56,7 @@
   import { supabase } from './supabase.js';
 
   const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
+  const currentUser = localStorage.getItem('tm_user') || '';
 
   const map = L.map('map').setView([32.88, -117.23], 13);
 
@@ -64,9 +65,16 @@
     maxZoom: 19
   }).addTo(map);
 
+  const markerIds = new Set();
+
   function addMarker(obs) {
+    const lat = obs.lat ?? obs.latitude;
+    const lon = obs.lon ?? obs.longitude;
+    if (!lat || !lon) return;
+    if (obs.id && markerIds.has(obs.id)) return;
+    if (obs.id) markerIds.add(obs.id);
     const color = getApproachabilityColor(obs.approachability);
-    const marker = L.circleMarker([obs.lat, obs.lon], {
+    const marker = L.circleMarker([lat, lon], {
       radius: 8,
       fillColor: color,
       color: color,
@@ -75,14 +83,15 @@
       fillOpacity: 0.8
     }).addTo(map);
 
+    const species = obs.species ?? obs.species_name;
     const popupContent = `
       <div style="font-family: 'Roboto Condensed', sans-serif;">
-        <strong>${obs.species}</strong><br>
+        <strong>${species}</strong><br>
         <span style="display: inline-block; background-color: ${color}; color: white; padding: 0.25rem 0.5rem; border-radius: 3px; font-size: 0.85rem; margin-top: 0.5rem;">
           ${obs.approachability}
         </span><br>
         <span style="font-family: 'DM Mono', monospace; font-size: 0.9rem; margin-top: 0.5rem; display: block;">
-          ${obs.lat.toFixed(3)}, ${obs.lon.toFixed(3)}
+          ${lat.toFixed(3)}, ${lon.toFixed(3)}
         </span>
         <small style="color: #666; display: block; margin-top: 0.5rem;">
           ${new Date(obs.timestamp).toLocaleString()}
@@ -98,9 +107,8 @@
       mockObservations.forEach(addMarker);
     } else {
       try {
-        const response = await supabase
-          .from('observations')
-          .select('*');
+        let query = supabase.from('observations').select('*');
+        const response = await query;
 
         if (response.error) {
           mockObservations.forEach(addMarker);
@@ -118,15 +126,27 @@
 
   // Subscribe to real-time updates if logged in
   if (!isGuest) {
-    const subscription = supabase
-      .channel('observations')
+    supabase
+      .channel('map-observations')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'observations' },
         (payload) => {
-          addMarker(payload.new);
+          const row = payload.new;
+          if (currentUser && row.researcher_name && row.researcher_name !== currentUser) return;
+          addMarker(row);
         }
       )
       .subscribe();
+
+    // /events fallback polling every 5 seconds
+    setInterval(async () => {
+      try {
+        const res = await fetch('http://localhost:8000/events');
+        if (!res.ok) return;
+        const events = await res.json();
+        events.forEach(ev => addMarker({ ...ev, lat: ev.lat, lon: ev.lon, species: ev.species }));
+      } catch (e) {}
+    }, 5000);
   }
 </script>

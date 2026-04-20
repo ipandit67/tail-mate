@@ -1,20 +1,12 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>TailMate – Live Feed</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{background:#1a1a1a;color:#f0ede8;font-family:'Roboto Condensed',sans-serif;}
-  .feed-layout{display:flex;gap:0;height:calc(100vh - 110px);min-height:400px;}
+  .feed-layout{display:flex;gap:0;height:calc(100vh - 110px);min-height:400px;background:#1a1a1a;}
   .feed-video-col{flex:1;position:relative;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;}
   .feed-video-col img{width:100%;height:100%;object-fit:contain;display:block;}
   .feed-video-col .offline-msg{position:absolute;color:#888;font-size:18px;display:none;}
   .event-banner{position:absolute;top:0;left:0;right:0;background:#C0392B;color:#fff;text-align:center;font-size:20px;font-weight:700;padding:10px;letter-spacing:2px;display:none;z-index:10;}
   @keyframes blink{0%,100%{opacity:1;}50%{opacity:0.3;}}
   .event-banner.active{display:block;animation:blink 0.7s infinite;}
-  .feed-side-col{width:320px;display:flex;flex-direction:column;background:#23292e;border-left:1px solid #333;}
+  .feed-side-col{width:320px;display:flex;flex-direction:column;background:#23292e;border-left:1px solid #333;color:#f0ede8;}
   .detection-panel{padding:20px;border-bottom:1px solid #333;flex-shrink:0;}
   .detection-panel h3{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:12px;}
   .det-species{font-size:26px;font-weight:700;color:#f0ede8;margin-bottom:8px;line-height:1.2;}
@@ -31,26 +23,35 @@
     from { opacity: 0; transform: translateY(-12px); max-height: 0; padding-top: 0; padding-bottom: 0; margin-bottom: 0; }
     to   { opacity: 1; transform: translateY(0); max-height: 200px; padding-top: 12px; padding-bottom: 12px; margin-bottom: 10px; }
   }
-  .event-card.new-card{
-    animation: eventSlideDown 200ms ease-out;
-  }
+  .event-card.new-card{ animation: eventSlideDown 200ms ease-out; }
   .event-card .ec-species{font-size:16px;font-weight:700;color:#f0ede8;}
   .event-card .ec-approach{font-size:12px;margin:4px 0;font-weight:700;}
   .event-card .ec-time{font-size:11px;color:#666;font-family:'DM Mono',monospace;}
   .event-card .ec-meta{font-size:11px;color:#888;margin-top:4px;display:flex;align-items:center;gap:8px;}
   .ec-health-dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0;}
   .no-events{color:#555;font-size:13px;text-align:center;margin-top:20px;}
+  .ec-thumb{width:100%;height:80px;object-fit:cover;border-radius:4px;margin-bottom:6px;display:block;}
+  .det-thumb{width:100%;max-height:120px;object-fit:cover;border-radius:6px;margin-bottom:10px;display:block;}
+  .capture-toggle{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid #333;flex-shrink:0;}
+  .capture-btn{flex:1;padding:9px 0;border:none;border-radius:8px;font-family:'Roboto Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:0.05em;cursor:pointer;transition:background 0.15s,opacity 0.15s;}
+  .capture-btn.off{background:#4A7C59;color:#fff;}
+  .capture-btn.on{background:#C0392B;color:#fff;}
+  .capture-btn:disabled{opacity:0.5;cursor:default;}
+  .capture-indicator{width:10px;height:10px;border-radius:50%;flex-shrink:0;background:#444;transition:background 0.3s;}
+  .capture-indicator.live{background:#C0392B;box-shadow:0 0 6px #C0392B;animation:blink 1.2s infinite;}
 </style>
-</head>
-<body>
+
 <div class="feed-layout">
   <div class="feed-video-col">
     <div class="event-banner" id="eventBanner">EVENT DETECTED</div>
     <img id="videoFeed" src="http://localhost:8000/video_feed" alt="Live Feed"/>
     <div class="offline-msg" id="offlineMsg">Camera offline — reconnecting…</div>
   </div>
-
   <div class="feed-side-col">
+    <div class="capture-toggle">
+      <span class="capture-indicator" id="captureIndicator"></span>
+      <button class="capture-btn off" id="captureBtn">Start Capture</button>
+    </div>
     <div class="detection-panel">
       <h3>Latest Detection</h3>
       <div id="detectionContent"><p class="det-empty">Awaiting capture…</p></div>
@@ -63,136 +64,165 @@
 </div>
 
 <script>
-const videoFeed = document.getElementById('videoFeed');
-const offlineMsg = document.getElementById('offlineMsg');
-const eventBanner = document.getElementById('eventBanner');
-const detectionContent = document.getElementById('detectionContent');
-const eventTimeline = document.getElementById('eventTimeline');
+(function() {
+  const videoFeed = document.getElementById('videoFeed');
+  const offlineMsg = document.getElementById('offlineMsg');
+  const eventBanner = document.getElementById('eventBanner');
+  const detectionContent = document.getElementById('detectionContent');
+  const eventTimeline = document.getElementById('eventTimeline');
 
-let lastEventCount = 0;
-let bannerTimeout = null;
+  let lastEventCount = 0;
+  let bannerTimeout = null;
 
-// Auto-reconnect video feed on error
-function reconnectFeed() {
-  offlineMsg.style.display = 'block';
-  videoFeed.style.opacity = '0.3';
-  setTimeout(() => {
-    videoFeed.src = 'http://localhost:8000/video_feed?' + Date.now();
-  }, 3000);
-}
-videoFeed.onerror = reconnectFeed;
-videoFeed.onload = () => {
-  offlineMsg.style.display = 'none';
-  videoFeed.style.opacity = '1';
-};
+  const captureBtn = document.getElementById('captureBtn');
+  const captureIndicator = document.getElementById('captureIndicator');
 
-function approachabilityColor(text) {
-  if (!text) return '#888';
-  if (text.includes('Do Not')) return '#C0392B';
-  if (text.includes('Observe')) return '#E8923A';
-  return '#4A7C59';
-}
-
-function renderDetection(ev) {
-  const color = approachabilityColor(ev.approachability);
-  const notes = ev.notes ? `<div class="det-notes">${ev.notes}</div>` : '';
-  detectionContent.innerHTML = `
-    <div class="det-species">${ev.species}</div>
-    <div class="det-badge" style="background:${color}">${ev.approachability}</div>
-    ${notes}
-    <div class="det-row">Confidence: <b>${ev.confidence}%</b></div>
-    <div class="det-row">Time: <b>${ev.timestamp}</b></div>
-  `;
-}
-
-function healthColor(status) {
-  if (status === 'RED') return '#C0392B';
-  if (status === 'ORANGE') return '#E8923A';
-  return '#4A7C59';
-}
-
-function makeEventCard(ev, isNew) {
-  const color = approachabilityColor(ev.approachability);
-  const dotColor = healthColor(ev.health_status);
-  const card = document.createElement('div');
-  card.className = 'event-card' + (isNew ? ' new-card' : '');
-  card.innerHTML = `
-    <div class="ec-species">${ev.species}</div>
-    <div class="ec-approach" style="color:${color}">${ev.approachability}</div>
-    <div class="ec-time">${ev.timestamp}</div>
-    <div class="ec-meta">
-      <span class="ec-health-dot" style="background:${dotColor}" title="Health: ${ev.health_status || 'GREEN'}"></span>
-      <span>${ev.confidence || 92}% confidence</span>
-    </div>
-  `;
-  if (ev.id) {
-    card.addEventListener('click', () => { window.location.href = `journal.html?id=${ev.id}`; });
-  }
-  if (isNew) {
-    setTimeout(() => card.classList.remove('new-card'), 250);
-  }
-  return card;
-}
-
-function rebuildTimeline(events) {
-  if (!events.length) {
-    eventTimeline.innerHTML = '<p class="no-events">No events this session.</p>';
-    return;
-  }
-  eventTimeline.innerHTML = '';
-  events.forEach(ev => eventTimeline.appendChild(makeEventCard(ev, false)));
-}
-
-let knownEventIds = new Set();
-
-function prependEventCard(ev) {
-  const placeholder = eventTimeline.querySelector('.no-events');
-  if (placeholder) placeholder.remove();
-  eventTimeline.insertBefore(makeEventCard(ev, true), eventTimeline.firstChild);
-}
-
-function triggerBanner() {
-  eventBanner.classList.add('active');
-  clearTimeout(bannerTimeout);
-  bannerTimeout = setTimeout(() => eventBanner.classList.remove('active'), 5000);
-}
-
-function showNavBadge() {
-  // Signal parent page via localStorage flag; index.html watches and adds the badge
-  try {
-    localStorage.setItem('livefeed_new_event', '1');
-    // Dispatch storage event manually (storage event only fires across windows)
-    window.dispatchEvent(new StorageEvent('storage', { key: 'livefeed_new_event', newValue: '1' }));
-  } catch(e) {}
-}
-
-async function pollEvents() {
-  try {
-    const res = await fetch('http://localhost:8000/events');
-    if (!res.ok) return;
-    const events = await res.json(); // newest first
-    if (events.length > lastEventCount) {
-      const newCount = events.length - lastEventCount;
-      const newEvents = events.slice(0, newCount); // newest first = prepend order
-      if (lastEventCount === 0) {
-        // First load — build full list without animation
-        rebuildTimeline(events);
-      } else {
-        newEvents.forEach(ev => prependEventCard(ev));
-      }
-      renderDetection(events[0]); // most recent
-      triggerBanner();
-      showNavBadge();
-      lastEventCount = events.length;
+  function setCaptureState(running) {
+    if (running) {
+      captureBtn.textContent = 'Stop Capture';
+      captureBtn.className = 'capture-btn on';
+      captureIndicator.className = 'capture-indicator live';
+    } else {
+      captureBtn.textContent = 'Start Capture';
+      captureBtn.className = 'capture-btn off';
+      captureIndicator.className = 'capture-indicator';
     }
-  } catch (e) {
-    // backend offline, ignore
+    captureBtn.disabled = false;
   }
-}
 
-// Poll every 3 seconds
-pollEvents();
-setInterval(pollEvents, 3000);
+  async function checkCaptureStatus() {
+    try {
+      const res = await fetch('http://localhost:8000/capture/status');
+      const data = await res.json();
+      setCaptureState(data.running);
+    } catch(e) {}
+  }
+
+  captureBtn.addEventListener('click', async () => {
+    captureBtn.disabled = true;
+    const isOn = captureBtn.classList.contains('on');
+    try {
+      const res = await fetch(`http://localhost:8000/capture/${isOn ? 'stop' : 'start'}`, { method: 'POST' });
+      const data = await res.json();
+      setCaptureState(data.running);
+    } catch(e) {
+      captureBtn.disabled = false;
+    }
+  });
+
+  checkCaptureStatus();
+
+  function reconnectFeed() {
+    offlineMsg.style.display = 'block';
+    videoFeed.style.opacity = '0.3';
+    setTimeout(() => { videoFeed.src = 'http://localhost:8000/video_feed?' + Date.now(); }, 3000);
+  }
+  videoFeed.onerror = reconnectFeed;
+  videoFeed.onload = () => { offlineMsg.style.display = 'none'; videoFeed.style.opacity = '1'; };
+
+  function formatPST(ts) {
+    const d = new Date(ts);
+    return d.toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function approachabilityColor(text) {
+    if (!text) return '#888';
+    if (text.includes('Do Not')) return '#C0392B';
+    if (text.includes('Observe')) return '#E8923A';
+    return '#4A7C59';
+  }
+
+  function healthColor(status) {
+    if (status === 'RED') return '#C0392B';
+    if (status === 'ORANGE') return '#E8923A';
+    return '#4A7C59';
+  }
+
+  function renderDetection(ev) {
+    const color = approachabilityColor(ev.approachability);
+    const notes = ev.notes ? `<div class="det-notes">${ev.notes}</div>` : '';
+    const thumbHtml = ev.image_url ? `<img class="det-thumb" src="${ev.image_url}" alt="capture">` : '';
+    detectionContent.innerHTML = `
+      ${thumbHtml}
+      <div class="det-species">${ev.species}</div>
+      <div class="det-badge" style="background:${color}">${ev.approachability}</div>
+      ${notes}
+      <div class="det-row">Time: <b>${formatPST(ev.timestamp)}</b></div>
+    `;
+  }
+
+  function makeEventCard(ev, isNew) {
+    const color = approachabilityColor(ev.approachability);
+    const dotColor = healthColor(ev.health_status);
+    const card = document.createElement('div');
+    card.className = 'event-card' + (isNew ? ' new-card' : '');
+    const thumbHtml = ev.image_url ? `<img class="ec-thumb" src="${ev.image_url}" alt="capture">` : '';
+    card.innerHTML = `
+      ${thumbHtml}
+      <div class="ec-species">${ev.species}</div>
+      <div class="ec-approach" style="color:${color}">${ev.approachability}</div>
+      <div class="ec-time">${formatPST(ev.timestamp)}</div>
+      <div class="ec-meta">
+        <span class="ec-health-dot" style="background:${dotColor}" title="Health: ${ev.health_status || 'GREEN'}"></span>
+      </div>
+    `;
+    if (ev.id) {
+      card.addEventListener('click', () => { window.location.href = `journal.html?id=${ev.id}`; });
+    }
+    if (isNew) { setTimeout(() => card.classList.remove('new-card'), 250); }
+    return card;
+  }
+
+  function rebuildTimeline(events) {
+    eventTimeline.innerHTML = '';
+    if (!events.length) {
+      eventTimeline.innerHTML = '<p class="no-events">No events this session.</p>';
+      return;
+    }
+    events.forEach(ev => eventTimeline.appendChild(makeEventCard(ev, false)));
+  }
+
+  function prependEventCard(ev) {
+    const placeholder = eventTimeline.querySelector('.no-events');
+    if (placeholder) placeholder.remove();
+    eventTimeline.insertBefore(makeEventCard(ev, true), eventTimeline.firstChild);
+  }
+
+  function triggerBanner() {
+    eventBanner.classList.add('active');
+    clearTimeout(bannerTimeout);
+    bannerTimeout = setTimeout(() => eventBanner.classList.remove('active'), 5000);
+  }
+
+  function showNavBadge() {
+    try {
+      localStorage.setItem('livefeed_new_event', '1');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'livefeed_new_event', newValue: '1' }));
+    } catch(e) {}
+  }
+
+  async function pollEvents() {
+    try {
+      const res = await fetch('http://localhost:8000/events');
+      if (!res.ok) return;
+      const events = await res.json();
+      if (events.length > lastEventCount) {
+        const newCount = events.length - lastEventCount;
+        const newEvents = events.slice(0, newCount);
+        if (lastEventCount === 0) {
+          rebuildTimeline(events);
+        } else {
+          newEvents.forEach(ev => prependEventCard(ev));
+        }
+        renderDetection(events[0]);
+        triggerBanner();
+        showNavBadge();
+        lastEventCount = events.length;
+      }
+    } catch (e) {}
+  }
+
+  pollEvents();
+  const _livefeedInterval = setInterval(pollEvents, 3000);
+})();
 </script>
-</body>
-</html>

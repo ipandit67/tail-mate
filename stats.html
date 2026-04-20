@@ -96,6 +96,7 @@
   import { supabase } from './supabase.js';
 
   const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
+  const currentUser = localStorage.getItem('tm_user') || '';
 
   function normalizeObs(o) {
     return {
@@ -116,9 +117,8 @@
 
     if (!isGuest) {
       try {
-        const response = await supabase
-          .from('observations')
-          .select('*');
+        let query = supabase.from('observations').select('*');
+        const response = await query;
 
         if (response.data && response.data.length > 0) {
           observations = response.data.map(normalizeObs);

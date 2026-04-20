@@ -1,17 +1,25 @@
+
+# SQL — run once in Supabase before deploying:
+# alter table observations add column if not exists image_url text;
+# alter table observations add column if not exists researcher_name text;
+# alter table observations add column if not exists health_status text;
+# alter table observations add column if not exists approachability text;
+
 import cv2
 import io
 import os
 import random
+import subprocess
+import signal
 import pandas as pd
 import json
 import queue
-import threading
 import numpy as np
-import requests as http_requests
 from flask import Flask, request, jsonify, render_template_string, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import PIL.Image  # For handling the photo
 from PIL import Image
 from supabase import create_client
@@ -21,12 +29,7 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
 # --- TEST MODE ---
-TEST_MODE = True
-TEST_SPECIES = ["Western Fence Lizard", "Southern Pacific Rattlesnake", "Southern Alligator Lizard", "Orange-throated Whiptail"]
-
-# --- ARDUINO DEVICE IPs ---
-DEVICE1_IP = "tailmate.local"
-DEVICE2_IP = "tailmate2.local"
+TEST_MODE = False
 
 
 @app.route('/')
@@ -46,31 +49,16 @@ current_review = {"state": "awaiting"}
 # --- SESSION EVENTS (in-memory, for /events endpoint) ---
 session_events = []
 
+# --- CAPTURE PROCESS ---
+_capture_proc = None
+_capture_enabled = True
+
 # --- LATEST SENSOR READINGS ---
 latest_sensors = {"temp": 0, "humidity": 0, "distance": 0, "movement": 0}
 latest_sensor_timestamp = None
 
 # --- GEMINI CONFIGURATION ---
-genai.configure(api_key="AIzaSyAdlzNMwNigeVmeheBwF1E1jrUmQpTfiRY")
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-
-# ==========================================
-# BACKGROUND: ARDUINO SENSOR POLLING
-# ==========================================
-def poll_sensors():
-    global latest_sensors, latest_sensor_timestamp
-    while True:
-        import time
-        for ip, label in [(DEVICE1_IP, "Device1"), (DEVICE2_IP, "Device2")]:
-            try:
-                resp = http_requests.get(f"http://{ip}:8000/sensors", timeout=3)
-                data = resp.json()
-                latest_sensors.update({k: v for k, v in data.items() if k in latest_sensors})
-                latest_sensor_timestamp = datetime.now().isoformat()
-            except Exception as e:
-                print(f"Sensor poll failed ({label}): {e}")
-        time.sleep(5)
+client = genai.Client(api_key="AIzaSyCalLuBYqmHPMb2Lmny-NXIt7L4z7Cuax0")
 
 
 # --- VIDEO FEED STATE ---
@@ -305,8 +293,28 @@ def get_relocation_guidance(species_name):
 # ==========================================
 # 2. ML & LOGIC LAYER
 # ==========================================
+SPECIES_ALIASES = {
+    "kingsnake": "California King Snake",
+    "king snake": "California King Snake",
+    "cal king": "California King Snake",
+    "rattlesnake": "Southern Pacific Rattlesnake",
+    "rattle snake": "Southern Pacific Rattlesnake",
+    "alligator lizard": "Southern Alligator Lizard",
+    "fence lizard": "Western Fence Lizard",
+    "blue belly": "Western Fence Lizard",
+    "whiptail": "Orange-throated Whiptail",
+    "skink": "Western Skink",
+    "legless lizard": "San Diegan Legless Lizard",
+    "side-blotched": "Western Side-blotched Lizard",
+    "side blotched": "Western Side-blotched Lizard",
+}
+
 def fuzzy_lookup(species_name):
     name_lower = species_name.lower()
+    # Alias map first
+    for alias, canonical in SPECIES_ALIASES.items():
+        if alias in name_lower:
+            return SPECIES_DB.get(canonical)
     # Exact case-insensitive match
     for key in SPECIES_DB:
         if key.lower() == name_lower:
@@ -359,50 +367,50 @@ def assess_animal_health(species, temp, humidity, distance, in_habitat, is_venom
 
     # Temperature rules
     if temp > 38:
-        flags.append({"icon": "🔥", "level": "red", "text": "Critical heat stress — reptile body temperature dangerously elevated"})
+        flags.append({"icon": "", "level": "red", "text": "Critical heat stress — reptile body temperature dangerously elevated"})
         bump("red")
     elif temp > 32:
-        flags.append({"icon": "🌡️", "level": "orange", "text": "Elevated thermal stress — reptile likely seeking shade"})
+        flags.append({"icon": "", "level": "orange", "text": "Elevated thermal stress — reptile likely seeking shade"})
         bump("orange")
     elif temp < 10:
-        flags.append({"icon": "❄️", "level": "orange", "text": "Hypothermic risk — reptile mobility severely reduced"})
+        flags.append({"icon": "", "level": "orange", "text": "Hypothermic risk — reptile mobility severely reduced"})
         bump("orange")
     elif 18 <= temp <= 30:
-        flags.append({"icon": "✓", "level": "green", "text": "Optimal thermal range"})
+        flags.append({"icon": "", "level": "green", "text": "Optimal thermal range"})
 
     # Humidity rules
     if humidity < 20:
-        flags.append({"icon": "💧", "level": "red", "text": "Critically low humidity — dehydration risk high"})
+        flags.append({"icon": "", "level": "red", "text": "Critically low humidity — dehydration risk high"})
         bump("red")
     elif humidity < 35:
-        flags.append({"icon": "💧", "level": "orange", "text": "Low humidity — monitor for dehydration"})
+        flags.append({"icon": "", "level": "orange", "text": "Low humidity — monitor for dehydration"})
         bump("orange")
     elif humidity > 85:
-        flags.append({"icon": "💦", "level": "orange", "text": "High humidity — fungal infection risk for some species"})
+        flags.append({"icon": "", "level": "orange", "text": "High humidity — fungal infection risk for some species"})
         bump("orange")
 
     # Distance rules
     if distance < 20 and is_venomous:
-        flags.append({"icon": "⚠️", "level": "red", "text": "CRITICAL: Dangerously close to venomous animal — back away immediately"})
+        flags.append({"icon": "", "level": "red", "text": "CRITICAL: Dangerously close to venomous animal — back away immediately"})
         bump("red")
     elif distance < 50 and is_venomous:
-        flags.append({"icon": "⚠️", "level": "orange", "text": "Warning: Within strike range of venomous species"})
+        flags.append({"icon": "", "level": "orange", "text": "Warning: Within strike range of venomous species"})
         bump("orange")
     elif distance < 30 and not is_venomous:
-        flags.append({"icon": "⚠️", "level": "orange", "text": "Very close encounter — animal may feel threatened"})
+        flags.append({"icon": "", "level": "orange", "text": "Very close encounter — animal may feel threatened"})
         bump("orange")
 
     # Habitat rules
     if not in_habitat:
-        flags.append({"icon": "🗺️", "level": "orange", "text": "Species outside documented range — possible displacement or climate shift"})
+        flags.append({"icon": "", "level": "orange", "text": "Species outside documented range — possible displacement or climate shift"})
         bump("orange")
 
     # Combined stress index
     if temp > 35 and humidity < 25:
-        flags.append({"icon": "🔥", "level": "red", "text": "Combined heat and dehydration stress — animal in survival mode"})
+        flags.append({"icon": "", "level": "red", "text": "Combined heat and dehydration stress — animal in survival mode"})
         bump("red")
     if not in_habitat and (temp > 33 or temp < 12):
-        flags.append({"icon": "🚨", "level": "red", "text": "Displaced animal in thermal stress — intervention may be needed"})
+        flags.append({"icon": "", "level": "red", "text": "Displaced animal in thermal stress — intervention may be needed"})
         bump("red")
 
     color_map = {"green": "#4A7C59", "orange": "#E8923A", "red": "#C0392B"}
@@ -431,15 +439,7 @@ MOCK_NOTES = {
 
 
 def generate_species_notes(species_name):
-    if TEST_MODE:
-        return MOCK_NOTES.get(species_name, f"Field note placeholder for {species_name}.")
-    try:
-        prompt = f"Write a brief 2-3 sentence field note about {species_name} in San Diego. Focus on identifying features and behavior. Keep it under 150 characters."
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=[prompt])
-        return response.text.strip()
-    except Exception as e:
-        # Compact error so it doesn't pollute the notes column with multi-KB blobs
-        return f"Notes unavailable: {type(e).__name__}"
+    return MOCK_NOTES.get(species_name, f"Species observed in San Diego field area. No additional notes on record.")
 
 
 # ==========================================
@@ -485,26 +485,13 @@ def events():
 def handle_arduino_trigger():
     global current_review, _motion_flash_until
 
-    # Try to capture a fresh frame directly from the local camera
-    cap = cv2.VideoCapture(0)
-    for _ in range(5): cap.read()  # flush stale frames
-    ret, frame = cap.read()
-    cap.release()
-
-    if ret:
-        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = PIL.Image.fromarray(img_rgb)
-        is_success, buffer = cv2.imencode(".jpg", frame)
-        img_bytes = buffer.tobytes()
+    img_file = request.files.get('image')
+    if img_file:
+        img_bytes = img_file.read()
+        img = PIL.Image.open(io.BytesIO(img_bytes))
     else:
-        # Fallback to uploaded file if camera capture fails
-        img_file = request.files.get('image')
-        if img_file:
-            img_bytes = img_file.read()
-            img = PIL.Image.open(io.BytesIO(img_bytes))
-        else:
-            img_bytes = b''
-            img = PIL.Image.new('RGB', (640, 480))
+        img_bytes = b''
+        img = PIL.Image.new('RGB', (640, 480))
 
     temp     = _safe_float(request.form.get('temp'),     latest_sensors.get('temp', 0))
     humidity = _safe_float(request.form.get('humidity'), latest_sensors.get('humidity', 0))
@@ -545,17 +532,35 @@ def handle_arduino_trigger():
         detected_species = random.choice(TEST_SPECIES)
         print(f"TEST MODE: skipping Gemini, using mock species: {detected_species}")
     else:
-        prompt = "Identify this San Diego reptile. Give me ONLY the common name."
-        response = model.generate_content([prompt, img])
-        detected_species = response.text.strip()
+        try:
+            prompt = "Identify this reptile or animal. Give me ONLY the common name, nothing else. If it is a California kingsnake say 'California King Snake'. If it is a rattlesnake say 'Southern Pacific Rattlesnake'."
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[prompt, img]
+            )
+            detected_species = response.text.strip()
+            print(f"Gemini identified: {detected_species}")
+        except Exception as e:
+            print(f"Gemini failed ({type(e).__name__}): {e}")
+            detected_species = "Animal — not native"
+            print(f"Gemini unavailable — flagging as unidentified")
     lat = float(request.form.get('lat', 32.880))
     lon = float(request.form.get('lon', -117.235))
 
-    alert_color, status_text, habitat_ok = analyze_capture(detected_species, lat, lon)
-
-    is_venomous = detected_species in VENOMOUS_SPECIES
-    approachability = get_approachability(is_venomous, alert_color, habitat_ok, status_text)
-    approachability_color = "#4A7C59" if alert_color == "GREEN" else ("#E8923A" if status_text == "Common" else "#C0392B")
+    # Unknown species fallback
+    if not fuzzy_lookup(detected_species):
+        detected_species = "Animal — not native"
+        alert_color = "RED"
+        status_text = "Unknown — outside documented range"
+        habitat_ok = False
+        is_venomous = False
+        approachability = "Observe from Distance"
+        approachability_color = "#E8923A"
+    else:
+        alert_color, status_text, habitat_ok = analyze_capture(detected_species, lat, lon)
+        is_venomous = detected_species in VENOMOUS_SPECIES
+        approachability = get_approachability(is_venomous, alert_color, habitat_ok, status_text)
+        approachability_color = "#4A7C59" if alert_color == "GREEN" else ("#E8923A" if status_text == "Common" else "#C0392B")
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     notes = generate_species_notes(detected_species)
@@ -566,6 +571,8 @@ def handle_arduino_trigger():
     # Relocation guidance
     relocation = get_relocation_guidance(detected_species)
     relocation_needed = (not habitat_ok) or (health["health_status"] in ("RED", "ORANGE")) or is_venomous
+
+    researcher_name = request.form.get('researcher_name', '')
 
     # Only include columns that exist in the observations table
     record = {
@@ -584,6 +591,8 @@ def handle_arduino_trigger():
         "timestamp": timestamp,
         "image_url": image_url,
         "notes": notes,
+        "health_status": health["health_status"],
+        "researcher_name": researcher_name,
     }
 
     saved_ok = False
@@ -736,7 +745,7 @@ REVIEW_HTML = """<!DOCTYPE html>
   .card{background:#fff;border-radius:14px;padding:20px;margin-bottom:14px;box-shadow:0 2px 12px rgba(0,0,0,0.06);}
   .card-label{font-size:11px;letter-spacing:2px;color:#888;text-transform:uppercase;margin-bottom:10px;font-weight:700;}
   .species-name{font-family:'Playfair Display',serif;font-size:38px;color:#2C3E2D;line-height:1.1;margin-bottom:6px;}
-  .conf-line{font-size:14px;color:#4A6B8A;margin-bottom:14px;}
+  .conf-line{display:none;}
   .badge{display:inline-block;padding:10px 22px;border-radius:50px;font-size:18px;font-weight:700;color:#fff;margin-bottom:10px;}
   .venomous-warn{background:#C0392B;color:#fff;border-radius:8px;padding:10px 16px;font-size:16px;font-weight:700;margin:8px 0;text-align:center;letter-spacing:1px;}
   .info-row{font-size:14px;margin:6px 0;color:#2C3E2D;}
@@ -775,11 +784,11 @@ REVIEW_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div class="topbar">
-  <div class="logo">🐍 TailMate</div>
+  <div class="logo">TailMate</div>
   <div class="meta" id="topbar-meta">—</div>
 </div>
 <div id="app">
-  <div class="awaiting"><div class="emoji pulse">🐍</div><div style="font-family:'Playfair Display',serif;font-size:24px;">Awaiting capture…</div></div>
+  <div class="awaiting"><div style="font-family:'Playfair Display',serif;font-size:24px;" class="pulse">Awaiting capture…</div></div>
 </div>
 <script>
 const app = document.getElementById('app');
@@ -808,20 +817,17 @@ function envClass(metric, value) {
 function renderResult(d) {
   topbarMeta.innerHTML = `${d.timestamp}<br>${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}`;
 
-  const venomHtml = d.venomous ? `<div class="venomous-warn">⚠ VENOMOUS SPECIES</div>` : '';
+  const venomHtml = d.venomous ? `<div class="venomous-warn">VENOMOUS SPECIES</div>` : '';
 
   const flagsHtml = (d.health_flags || []).map(f => {
     const colorMap = {green:'#4A7C59', orange:'#E8923A', red:'#C0392B'};
     return `<div class="health-flag" style="border-color:${colorMap[f.level]};">
-      <div class="flag-icon">${f.icon}</div>
       <div class="flag-text">${f.text}</div>
     </div>`;
   }).join('');
 
   const tempCls = envClass('temp', d.temp);
   const humCls = envClass('humidity', d.humidity);
-  const distCls = envClass('distance', d.distance);
-  const proxNote = (d.distance < 50 && d.venomous) ? '<div style="color:#C0392B;font-size:11px;margin-top:4px;font-weight:700;">⚠ STRIKE RANGE</div>' : '';
 
   const showReloc = (!d.habitat_match) || (d.health_status === 'RED' || d.health_status === 'ORANGE') || d.venomous;
   const r = d.relocation || {};
@@ -832,7 +838,7 @@ function renderResult(d) {
     const stepsHtml = (r.relocation_steps || []).map(s => `<li>${s}</li>`).join('');
     const agenciesHtml = (r.contact_agencies || []).map(a => {
       const phoneHref = a.phone.startsWith('http') ? a.phone : `tel:${a.phone.replace(/[^0-9+]/g, '')}`;
-      return `<a class="agency" href="${phoneHref}">📞 ${a.name}<br><span style="font-weight:400;font-size:13px;">${a.phone}</span></a>`;
+      return `<a class="agency" href="${phoneHref}">${a.name}<br><span style="font-weight:400;font-size:13px;">${a.phone}</span></a>`;
     }).join('');
     const donotHtml = (r.do_not || []).map(x => `<li>${x}</li>`).join('');
     relocHtml = `
@@ -862,8 +868,8 @@ function renderResult(d) {
       <div class="conf-line">${d.confidence}% AI confidence</div>
       <div class="badge" style="background:${d.approachability_color}">${d.approachability}</div>
       ${venomHtml}
-      <div class="info-row">📋 Conservation: <b>${d.status}</b></div>
-      <div class="info-row">🗺️ Habitat: <b>${d.habitat_match ? 'In documented range ✓' : 'Outside documented range ⚠'}</b></div>
+      <div class="info-row">Conservation: <b>${d.status}</b></div>
+      <div class="info-row">Habitat: <b>${d.habitat_match ? 'In documented range' : 'Outside documented range'}</b></div>
     </div>
 
     <div class="card">
@@ -878,7 +884,6 @@ function renderResult(d) {
       <div class="env-grid">
         <div class="env-item ${tempCls}"><div class="lbl">Temp</div><div class="val">${d.temp}°C</div></div>
         <div class="env-item ${humCls}"><div class="lbl">Humidity</div><div class="val">${d.humidity}%</div></div>
-        <div class="env-item ${distCls}"><div class="lbl">Distance</div><div class="val">${d.distance} cm</div>${proxNote}</div>
         <div class="env-item ok"><div class="lbl">Scripps SST</div><div class="val">${d.sea_temp || 19.2}°C</div></div>
       </div>
     </div>
@@ -894,7 +899,7 @@ es.onmessage = function(e) {
   if (!d.state) return;
   if(d.state === 'awaiting') {
     topbarMeta.innerHTML = '—';
-    app.innerHTML = `<div class="awaiting"><div class="emoji pulse">🐍</div><div style="font-family:'Playfair Display',serif;font-size:24px;">Awaiting capture…</div></div>`;
+    app.innerHTML = `<div class="awaiting"><div style="font-family:'Playfair Display',serif;font-size:24px;" class="pulse">Awaiting capture…</div></div>`;
   } else if(d.state === 'processing') {
     topbarMeta.innerHTML = 'Processing…';
     app.innerHTML = `
@@ -902,9 +907,8 @@ es.onmessage = function(e) {
         <div class="spinner"></div>
         <div style="font-size:18px;color:#4A6B8A;margin-bottom:14px;">Identifying species…</div>
         <div style="background:#fff;border-radius:12px;padding:16px 24px;font-size:14px;color:#4A6B8A;line-height:2;">
-          🌡️ Temp: <b>${d.temp}°C</b><br>
-          💧 Humidity: <b>${d.humidity}%</b><br>
-          📏 Distance: <b>${d.distance} cm</b>
+          Temp: <b>${d.temp}°C</b><br>
+          Humidity: <b>${d.humidity}%</b>
         </div>
       </div>`;
   } else if(d.state === 'result') {
@@ -959,7 +963,39 @@ def status():
     })
 
 
-threading.Thread(target=poll_sensors, daemon=True).start()
+
+@app.route('/capture/start', methods=['POST'])
+def capture_start():
+    global _capture_proc, _capture_enabled
+    _capture_enabled = True
+    if _capture_proc and _capture_proc.poll() is None:
+        return jsonify({"running": True, "msg": "Already running"})
+    _capture_proc = subprocess.Popen(
+        ["python3", os.path.join(os.path.dirname(__file__), "capture.py")],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    return jsonify({"running": True, "msg": "Capture started"})
+
+
+@app.route('/capture/stop', methods=['POST'])
+def capture_stop():
+    global _capture_proc, _capture_enabled
+    _capture_enabled = False  # blocks in-flight requests immediately
+    if _capture_proc and _capture_proc.poll() is None:
+        _capture_proc.terminate()
+        try:
+            _capture_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _capture_proc.kill()
+    _capture_proc = None
+    return jsonify({"running": False, "msg": "Capture stopped"})
+
+
+@app.route('/capture/status', methods=['GET'])
+def capture_status():
+    running = bool(_capture_proc and _capture_proc.poll() is None)
+    return jsonify({"running": running})
+
 
 if __name__ == '__main__':
     print("FieldLog Backend Active on http://localhost:8000")

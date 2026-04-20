@@ -128,6 +128,7 @@
   let currentPage = 1;
 
   const isGuest = new URLSearchParams(window.location.search).get('guest') === 'true';
+  const currentUser = localStorage.getItem('tm_user') || '';
 
   function normalizeObs(o) {
     return {
@@ -207,12 +208,13 @@
 
     table.innerHTML = page.map(o => {
       const d = new Date(o.timestamp);
-      const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      const habitatIcon = o.habitat === 'in' ? '✓' : '⚠';
+      const tz = { timeZone: 'America/Los_Angeles' };
+      const dateStr = d.toLocaleDateString('en-US', { ...tz, month: 'short', day: 'numeric' });
+      const timeStr = d.toLocaleTimeString('en-US', { ...tz, hour: '2-digit', minute: '2-digit' });
+      const habitatIcon = o.habitat === 'in' ? '✓' : '!';
       const habitatColor = o.habitat === 'in' ? 'var(--primary-green)' : 'var(--accent-orange)';
       const dotColor = healthColor(o.health_status);
-      const venomousPill = o.venomous ? `<span class="badge venomous" style="font-size:0.7rem;">⚠ Venomous</span>` : '';
+      const venomousPill = o.venomous ? `<span class="badge venomous" style="font-size:0.7rem;">Venomous</span>` : '';
       return `
         <div class="fl-row" data-id="${o.id}" onclick="window.location.href='journal.html?id=${o.id}'">
           <div class="fl-date">${dateStr}<span>${timeStr}</span></div>
@@ -221,8 +223,7 @@
             <div class="fl-meta">
               <span class="fl-health-dot" style="background:${dotColor}" title="Health: ${o.health_status || 'GREEN'}"></span>
               <span style="color:${habitatColor}">${habitatIcon}</span>
-              ${o.habitat === 'in' ? 'In Range' : 'Out of Range'} &nbsp;·&nbsp;
-              ${o.confidence || '—'}% conf
+              ${o.habitat === 'in' ? 'In Range' : 'Out of Range'}
             </div>
           </div>
           <div class="fl-right">
@@ -260,7 +261,8 @@
       allObs = mockObservations.map(normalizeObs);
     } else {
       try {
-        const res = await supabase.from('observations').select('*').order('timestamp', { ascending: false });
+        let query = supabase.from('observations').select('*').order('timestamp', { ascending: false });
+        const res = await query;
         allObs = (res.data && res.data.length > 0) ? res.data.map(normalizeObs) : mockObservations.map(normalizeObs);
       } catch (e) {
         allObs = mockObservations.map(normalizeObs);
